@@ -182,6 +182,7 @@ export function productSummary(db, p, settings, today = todayMsk()) {
     vendorCode: p.vendor_code,
     groupName: p.group_name,
     cost: p.cost_per_unit,
+    costSource: p.cost_source || null,
     snapshot: snap,
     week: cur,
     prevWeek: prev,

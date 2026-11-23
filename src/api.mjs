@@ -134,9 +134,13 @@ export function createApi({ db, cfg, log = console }) {
 
   route('PUT', '/api/products/:nm', ({ params, body }) => {
     const p = nmIdParam(params.nm, db);
+    if (p.cost_source === 'sheet' && body.cost_per_unit !== undefined && Number(body.cost_per_unit) !== p.cost_per_unit) {
+      throw new HttpError(409, 'COST_FROM_SHEET', 'Себестоимость этого товара берётся из таблицы «Финансы V3» — измените её в Менеджменте → «Себестоимость».');
+    }
     const cost = body.cost_per_unit === '' || body.cost_per_unit == null ? null : Number(body.cost_per_unit);
     if (cost != null && (!Number.isFinite(cost) || cost < 0)) throw new HttpError(400, 'BAD_COST', 'Себестоимость должна быть числом не меньше 0');
-    db.prepare('UPDATE products SET cost_per_unit = ?, group_name = ?, updated_at = ? WHERE nm_id = ?').run(cost, text(body.group_name, 100) || null, nowIso(), p.nm_id);
+    if (p.cost_source === 'sheet') db.prepare('UPDATE products SET group_name = ?, updated_at = ? WHERE nm_id = ?').run(text(body.group_name, 100) || null, nowIso(), p.nm_id);
+    else db.prepare("UPDATE products SET cost_per_unit = ?, cost_source = 'manual', group_name = ?, updated_at = ? WHERE nm_id = ?").run(cost, text(body.group_name, 100) || null, nowIso(), p.nm_id);
     return { ok: true };
   });
 
@@ -293,7 +297,7 @@ export function createApi({ db, cfg, log = console }) {
   // ---------- Настройки и синхронизация ----------
   route('GET', '/api/settings', () => ({
     settings: getSettings(db),
-    products: db.prepare('SELECT nm_id, title, vendor_code, group_name, cost_per_unit FROM products WHERE active = 1 ORDER BY sort').all(),
+    products: db.prepare('SELECT nm_id, title, vendor_code, group_name, cost_per_unit, cost_source, cost_updated_at FROM products WHERE active = 1 ORDER BY sort').all(),
     runs: lastRuns(db, 10),
     syncRunning: isSyncRunning(),
     mock: cfg.mock,

@@ -5,15 +5,16 @@ import { openDb } from '../src/db.mjs';
 import { hashPassword } from '../src/auth.mjs';
 import { createServer } from '../src/server.mjs';
 import { runSync } from '../src/sync.mjs';
-import { createMockClient } from '../src/wb/mock.mjs';
+import { createMockClient, createMockCostsSource } from '../src/wb/mock.mjs';
 
 const NM = [1293796729, 1293819178, 1293550875];
-const cfg = { mock: true, wbToken: '', passwordHash: hashPassword('пароль-для-теста'), sessionSecret: 'x'.repeat(40), trackedNmIds: NM, basePath: '/wb-funnel', cookieSecure: false };
+const cfg = { mock: true, wbToken: '', passwordHash: hashPassword('пароль-для-теста'), sessionSecret: 'x'.repeat(40), trackedNmIds: NM, basePath: '/management/wb-funnel', cookieSecure: false };
 const quiet = { warn() {}, error() {}, log() {} };
 
 test('API: вход, сбор, сводка, симулятор, планы, журнал', async () => {
   const db = openDb('', { memory: true });
-  await runSync(db, { kind: 'full', client: createMockClient({ nmIds: NM }), nmIds: NM, log: quiet });
+  const run = await runSync(db, { kind: 'full', client: createMockClient({ nmIds: NM }), costsSource: createMockCostsSource(), nmIds: NM, log: quiet });
+  assert.equal(run.status, 'ok', JSON.stringify(run.details.filter((d) => !d.ok)));
   const server = createServer({ db, cfg, log: quiet });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -48,12 +49,18 @@ test('API: вход, сбор, сводка, симулятор, планы, ж�
 
     // без заголовка защиты изменяющий запрос отклоняется
     assert.equal((await call('PUT', '/api/products/1293819178', { cost_per_unit: 250 }, { csrf: false })).status, 403);
-    assert.equal((await call('PUT', '/api/products/1293819178', { cost_per_unit: 250 })).status, 200);
-    assert.equal((await call('PUT', '/api/products/1293819178', { cost_per_unit: -5 })).status, 400);
+    // себестоимость из таблицы «Финансы V3» вручную не меняется
+    assert.equal((await call('PUT', '/api/products/1293819178', { cost_per_unit: 250 })).status, 409);
+    let prod = await call('GET', '/api/products/1293819178');
+    assert.equal(prod.json.summary.unit.cost, 202.5);
+    assert.equal(prod.json.summary.costSource, 'sheet');
+    // товар, которого нет в таблице, — можно вручную
+    db.prepare('UPDATE products SET cost_source = NULL, cost_per_unit = NULL WHERE nm_id = 1293550875').run();
+    assert.equal((await call('PUT', '/api/products/1293550875', { cost_per_unit: -5 })).status, 400);
+    assert.equal((await call('PUT', '/api/products/1293550875', { cost_per_unit: 140 })).status, 200);
+    prod = await call('GET', '/api/products/1293550875');
+    assert.equal(prod.json.summary.costSource, 'manual');
     assert.equal((await call('GET', '/api/products/123')).status, 404);
-
-    const prod = await call('GET', '/api/products/1293819178');
-    assert.equal(prod.json.summary.unit.cost, 250);
     assert.equal(prod.json.series.length, 30);
 
     const sim = await call('POST', '/api/simulate', { nmId: 1293819178, strategyKey: 'reviews', params: { reviews: 20 } });

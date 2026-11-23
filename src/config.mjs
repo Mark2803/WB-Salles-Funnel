@@ -42,8 +42,8 @@ function parseIds(text) {
 
 export const config = {
   host: env('HOST', '127.0.0.1'),
-  port: Number(env('PORT', '3200')),
-  basePath: env('BASE_PATH', '/wb-funnel').replace(/\/$/, '') || '/',
+  port: Number(env('PORT', '3300')),
+  basePath: env('BASE_PATH', '/management/wb-funnel').replace(/\/$/, '') || '/',
   wbToken: env('WB_API_TOKEN', ''),
   passwordHash: env('ADMIN_PASSWORD_HASH', ''),
   sessionSecret: env('SESSION_SECRET', ''),
@@ -51,6 +51,10 @@ export const config = {
   trackedNmIds: parseIds(env('TRACKED_NM_IDS', '')),
   syncEveryHours: Math.max(1, Number(env('SYNC_EVERY_HOURS', '3')) || 3),
   mock: env('WB_MOCK', '0') === '1',
+  // Себестоимость — из Google Таблицы «Финансы V3» (тот же ключ робота, что у Менеджмента)
+  googleKeyFile: env('GOOGLE_SERVICE_ACCOUNT_FILE', ''),
+  costsSpreadsheetId: env('COSTS_SPREADSHEET_ID', ''),
+  costsSheet: env('COSTS_SHEET', 'Себестоимость'),
   cookieSecure: env('COOKIE_SECURE', '1') === '1',
 };
 
@@ -62,6 +66,7 @@ export function checkConfig(cfg = config) {
   if (!cfg.sessionSecret || cfg.sessionSecret.length < 32) errors.push('SESSION_SECRET должен быть не короче 32 символов');
   if (!cfg.trackedNmIds.length) errors.push('TRACKED_NM_IDS пуст — укажите артикулы WB через запятую');
   if (!cfg.mock && !cfg.wbToken) warnings.push('Не задан WB_API_TOKEN — сбор данных работать не будет');
+  if (!cfg.mock && (!cfg.googleKeyFile || !cfg.costsSpreadsheetId)) warnings.push('Не заданы GOOGLE_SERVICE_ACCOUNT_FILE / COSTS_SPREADSHEET_ID — себестоимость из таблицы подтягиваться не будет');
   if (cfg.mock) warnings.push('Включён тестовый режим WB_MOCK=1 — данные выдуманные');
   return { errors, warnings };
 }

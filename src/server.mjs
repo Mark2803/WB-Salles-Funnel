@@ -1,5 +1,5 @@
 // HTTP-сервер: страница инструмента (папка public) и JSON API для неё.
-// Работает за nginx: снаружи https://tea-master-team.ru/wb-funnel/ → http://127.0.0.1:3200/
+// Работает за nginx: снаружи https://tea-master-team.ru/management/wb-funnel/ → http://127.0.0.1:3300/
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';

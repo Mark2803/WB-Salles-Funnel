@@ -270,7 +270,7 @@
         <div class="panel"><h2>Юнит-экономика</h2>
           <div class="kv">
             <div>Цена продавца</div><div class="num">${rub(u.price)}</div>
-            <div>Себестоимость</div><div class="num">${u.cost == null ? '<span class="muted">не указана</span>' : rub(u.cost)}</div>
+            <div>Себестоимость</div><div class="num">${u.cost == null ? '<span class="muted">не указана</span>' : `${n(u.cost, 2)} ₽`}</div>
             <div>Комиссия WB</div><div class="num">${pct(u.commissionPct)}</div>
             <div>Логистика на продажу</div><div class="num">${rub(u.logisticsPerSold)}</div>
             <div>Хранение и приёмка на продажу</div><div class="num">${rub(u.storagePerSold)}</div>
@@ -280,7 +280,11 @@
             <div>Рабочая реклама на продажу</div><div class="num">${rub(u.workAdPerSale)}</div>
           </div>
           <p class="small muted">${u.source === 'finance' ? 'Комиссия и логистика — фактические, из финотчёта WB за 30 дней.' : 'Комиссия и логистика — из настроек (финотчёта по товару ещё нет).'}</p>
-          <form class="form-row" id="costForm"><label>Себестоимость, ₽<br/><input type="number" min="0" step="0.01" id="costInput" value="${s.cost ?? ''}" /></label><button class="btn small" type="submit">Сохранить</button></form>
+          ${
+            s.costSource === 'sheet'
+              ? `<p class="small muted">Себестоимость — из таблицы «Финансы V3», лист «Себестоимость». Изменить: <a href="/management/costs/" target="_blank" rel="noopener">Менеджмент → Себестоимость</a>.</p>`
+              : `<form class="form-row" id="costForm"><label>Себестоимость, ₽<br/><input type="number" min="0" step="0.01" id="costInput" value="${s.cost ?? ''}" /></label><button class="btn small" type="submit">Сохранить</button></form><p class="small muted">Артикула нет в таблице себестоимости — можно указать вручную.</p>`
+          }
         </div>
         <div class="panel"><h2>Цена и остатки</h2><div id="chStock"></div></div>
       </div>
@@ -342,7 +346,7 @@
         { name: 'Остаток, шт.', values: d.series.map((x) => x.stocks), color: COLORS.buyouts, axis: 'right' },
       ],
     });
-    document.getElementById('costForm').addEventListener('submit', async (e) => {
+    document.getElementById('costForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
         await api(`products/${nmId}`, { method: 'PUT', body: { cost_per_unit: document.getElementById('costInput').value } });
@@ -625,11 +629,15 @@
     $app.innerHTML = `
       <h1>Настройки</h1>
       <div class="panel"><h2>Себестоимость товаров</h2>
-        <p class="muted">Полная себестоимость одной штуки: товар + упаковка + маркировка + доставка до склада WB. Без неё прибыль не считается.</p>
-        <table class="data"><thead><tr><th>Товар</th><th>Артикул</th><th>Себестоимость, ₽</th></tr></thead><tbody>${d.products
-          .map((p) => `<tr><td>${esc(shortTitle(p.title, p.vendor_code))}</td><td class="small muted">${p.nm_id}</td><td><input type="number" min="0" step="0.01" data-cost="${p.nm_id}" value="${p.cost_per_unit ?? ''}" /></td></tr>`)
+        <p class="muted">Берётся автоматически из таблицы «Финансы V3», лист «Себестоимость», по артикулу продавца — при каждом обновлении данных. Менять её — в <a href="/management/costs/" target="_blank" rel="noopener">Менеджмент → Себестоимость</a>. Вручную здесь можно указать только товары, которых нет в таблице.</p>
+        <table class="data"><thead><tr><th>Товар</th><th>Артикул продавца</th><th>Себестоимость, ₽</th><th>Источник</th></tr></thead><tbody>${d.products
+          .map(
+            (p) => `<tr><td>${esc(shortTitle(p.title, p.vendor_code))}<div class="small muted">${p.nm_id}</div></td><td class="small">${esc(p.vendor_code || '—')}</td>
+            <td>${p.cost_source === 'sheet' ? `<b>${n(p.cost_per_unit, 2)} ₽</b>` : `<input type="number" min="0" step="0.01" data-cost="${p.nm_id}" value="${p.cost_per_unit ?? ''}" />`}</td>
+            <td class="small">${p.cost_source === 'sheet' ? `<span class="tag green">таблица</span> <span class="muted">${p.cost_updated_at ? esc(new Date(p.cost_updated_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })) : ''}</span>` : p.cost_per_unit != null ? '<span class="tag grey">вручную</span>' : '<span class="down">нет в таблице</span>'}</td></tr>`,
+          )
           .join('')}</tbody></table>
-        <p><button class="btn" id="btnCosts" type="button">Сохранить себестоимость</button></p>
+        ${d.products.some((p) => p.cost_source !== 'sheet') ? '<p><button class="btn" id="btnCosts" type="button">Сохранить себестоимость</button></p>' : ''}
       </div>
       <div class="grid two">
         <div class="panel"><h2>Юнит-экономика по умолчанию</h2>
@@ -665,7 +673,7 @@
             : '<p class="empty">Сбор ещё не запускался.</p>'
         }
       </div>`;
-    document.getElementById('btnCosts').addEventListener('click', async () => {
+    document.getElementById('btnCosts')?.addEventListener('click', async () => {
       try {
         for (const inp of $app.querySelectorAll('input[data-cost]')) {
           await api(`products/${inp.dataset.cost}`, { method: 'PUT', body: { cost_per_unit: inp.value } });

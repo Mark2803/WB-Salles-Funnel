@@ -9,6 +9,8 @@ import { simulate, STRATEGIES, normalizeParams } from '../src/strategies.mjs';
 import { parseFunnelHistory, parseFullstats, parseAdverts, parsePrices, parseFinanceLines, parseFeedbacks, parseSearchTexts, parseFunnelProducts } from '../src/wb/collect.mjs';
 import { createWbClient } from '../src/wb/client.mjs';
 import { addDays, dateRange } from '../src/dates.mjs';
+import { parseCostSheet, applyCosts, toCost } from '../src/costs.mjs';
+import { openDb, ensureProducts } from '../src/db.mjs';
 
 test('разбор .env', () => {
   const env = parseEnv('# коммент\nA=1\nB="два"\n  C = x=y \nбез_равно\n');
@@ -154,4 +156,68 @@ test('клиент WB: повтор при 429 и понятная ошибка 
   assert.equal(calls[0][1], 't');
   assert.ok(calls[0][0].endsWith('/x?a=1'));
   await assert.rejects(() => client.get('analytics', '/y'), /Джем|доступа/);
+});
+
+test('себестоимость из листа «Себестоимость»: разбор и привязка по артикулу продавца', () => {
+  assert.equal(toCost('165,35'), 165.35);
+  assert.equal(toCost(144.5), 144.5);
+  assert.equal(toCost('146,00%'), null);
+  assert.equal(toCost('.'), null);
+  const map = parseCostSheet([
+    ['Артикул', 'Наименование', 'Себестоимость'],
+    ['SMOLA-SMILE-10,5', 'Смайлики 15', 202.5],
+    ['SMOLA-GABA-2', 'Габа 2', '68'],
+    ['SMOLA-GABA-6', 'Габа 6', '.'],
+  ]);
+  assert.equal(map.get('SMOLA-SMILE-10,5').cost, 202.5);
+  const db = openDb('', { memory: true });
+  ensureProducts(db, [1, 2, 3, 4]);
+  const set = db.prepare('UPDATE products SET vendor_code = ? WHERE nm_id = ?');
+  set.run('smola-smile-10,5', 1); // регистр не важен
+  set.run('SMOLA-GABA-2', 2);
+  set.run('SMOLA-GABA-6', 3);
+  set.run('NO-SUCH', 4);
+  const r = applyCosts(db, map);
+  assert.equal(r.matched, 2);
+  assert.deepEqual(r.missing, ['NO-SUCH']);
+  assert.equal(r.invalid.length, 1);
+  const row = db.prepare('SELECT cost_per_unit, cost_source FROM products WHERE nm_id = 1').get();
+  assert.equal(row.cost_per_unit, 202.5);
+  assert.equal(row.cost_source, 'sheet');
+  assert.throws(() => parseCostSheet([['Код', 'Цена']]), /Артикул/);
+});
+
+test('чтение Google Таблицы роботом: подпись JWT и запрос значений', async () => {
+  const { generateKeyPairSync, createVerify } = await import('node:crypto');
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { createSheetsReader, sheetRange } = await import('../src/google-sheets.mjs');
+  const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const keyFile = path.join(os.tmpdir(), `wb-test-key-${process.pid}.json`);
+  fs.writeFileSync(keyFile, JSON.stringify({ client_email: 'robot@test.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) }));
+  const calls = [];
+  const fetchImpl = async (url, init = {}) => {
+    calls.push(String(url));
+    if (String(url).includes('oauth2')) {
+      const assertion = new URLSearchParams(init.body.toString()).get('assertion');
+      const [h, p, sig] = assertion.split('.');
+      assert.ok(createVerify('RSA-SHA256').update(`${h}.${p}`).verify(publicKey, Buffer.from(sig, 'base64url')), 'подпись верна');
+      const claims = JSON.parse(Buffer.from(p, 'base64url').toString());
+      assert.equal(claims.scope, 'https://www.googleapis.com/auth/spreadsheets.readonly');
+      return new Response(JSON.stringify({ access_token: 'tok', expires_in: 3600 }));
+    }
+    assert.equal(init.headers.Authorization, 'Bearer tok');
+    return new Response(JSON.stringify({ values: [['Артикул', 'Себестоимость'], ['A', 10]] }));
+  };
+  try {
+    const reader = createSheetsReader({ keyFile, spreadsheetId: 'SHEET', fetchImpl });
+    const values = await reader.getValues(sheetRange('Себестоимость', 'A1:Z'));
+    assert.deepEqual(values[1], ['A', 10]);
+    assert.ok(calls[1].includes(encodeURIComponent("'Себестоимость'!A1:Z")));
+    await reader.getValues('x');
+    assert.equal(calls.filter((c) => c.includes('oauth2')).length, 1, 'токен Google кэшируется');
+  } finally {
+    fs.unlinkSync(keyFile);
+  }
 });

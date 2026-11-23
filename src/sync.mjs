@@ -6,6 +6,8 @@ import { todayMsk } from './dates.mjs';
 import { createWbClient } from './wb/client.mjs';
 import { createMockClient } from './wb/mock.mjs';
 import * as collect from './wb/collect.mjs';
+import { collectCosts, createCostsSource } from './costs.mjs';
+import { createMockCostsSource } from './wb/mock.mjs';
 
 let running = null;
 
@@ -13,24 +15,29 @@ export function makeClient(cfg = config) {
   return cfg.mock ? createMockClient({ nmIds: cfg.trackedNmIds }) : createWbClient({ token: cfg.wbToken });
 }
 
+export function makeCostsSource(cfg = config) {
+  return cfg.mock ? createMockCostsSource() : createCostsSource(cfg);
+}
+
 const STEPS = {
   funnel: { label: 'Воронка по дням', fn: collect.collectFunnel },
   summary: { label: 'Остатки и рейтинг', fn: collect.collectProductSummary },
   prices: { label: 'Цены', fn: collect.collectPrices },
+  costs: { label: 'Себестоимость (таблица «Финансы V3»)', fn: (client, db, nmIds, today, ctx) => collectCosts(ctx.costsSource, db) },
   ads: { label: 'Реклама', fn: collect.collectAds },
   feedbacks: { label: 'Отзывы', fn: collect.collectFeedbacks },
   finance: { label: 'Финансовый отчёт', fn: collect.collectFinance },
   search: { label: 'Поиск и позиции («Джем»)', fn: collect.collectSearch },
 };
 
-export const QUICK = ['funnel', 'summary', 'prices', 'ads'];
-export const FULL = ['funnel', 'summary', 'prices', 'ads', 'feedbacks', 'finance', 'search'];
+export const QUICK = ['funnel', 'summary', 'prices', 'costs', 'ads'];
+export const FULL = ['funnel', 'summary', 'prices', 'costs', 'ads', 'feedbacks', 'finance', 'search'];
 
 export function isSyncRunning() {
   return Boolean(running);
 }
 
-export async function runSync(db, { kind = 'quick', client = makeClient(), nmIds = config.trackedNmIds, today = todayMsk(), log = console } = {}) {
+export async function runSync(db, { kind = 'quick', client = makeClient(), costsSource = makeCostsSource(), nmIds = config.trackedNmIds, today = todayMsk(), log = console } = {}) {
   if (running) return { alreadyRunning: true, runId: running };
   ensureProducts(db, nmIds);
   const steps = kind === 'full' ? FULL : QUICK;
@@ -42,7 +49,7 @@ export async function runSync(db, { kind = 'quick', client = makeClient(), nmIds
       const step = STEPS[key];
       const startedAt = Date.now();
       try {
-        const result = await step.fn(client, db, nmIds, today);
+        const result = await step.fn(client, db, nmIds, today, { costsSource });
         details.push({ step: key, label: step.label, ok: true, result, ms: Date.now() - startedAt });
       } catch (err) {
         log.warn?.(`[sync] ${step.label}: ${err.message}`);

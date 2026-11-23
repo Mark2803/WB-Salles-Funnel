@@ -165,6 +165,11 @@ const MIGRATIONS = [
     details_json TEXT
   );
   `,
+  // 2 — откуда взята себестоимость: 'sheet' (лист «Себестоимость» в Финансы V3) или 'manual'
+  `
+  ALTER TABLE products ADD COLUMN cost_source TEXT;
+  ALTER TABLE products ADD COLUMN cost_updated_at TEXT;
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {
