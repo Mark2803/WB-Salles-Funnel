@@ -1,0 +1,18 @@
+{
+  "name": "wb-salles-funnel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Воронка продаж Wildberries: сбор данных по API, стратегии и симулятор для магазина «Чайный Мастер»",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite --disable-warning=ExperimentalWarning src/server.mjs",
+    "dev": "WB_MOCK=1 node --experimental-sqlite --disable-warning=ExperimentalWarning src/server.mjs",
+    "collect": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/collect-once.mjs",
+    "check": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/check-token.mjs",
+    "hash-password": "node scripts/hash-password.mjs",
+    "test": "node --experimental-sqlite --disable-warning=ExperimentalWarning --test tests/*.test.mjs"
+  }
+}

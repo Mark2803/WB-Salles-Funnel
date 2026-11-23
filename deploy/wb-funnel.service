@@ -1,0 +1,19 @@
+# systemd-служба инструмента «WB Воронка».
+# Установка: cp deploy/wb-funnel.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now wb-funnel
+[Unit]
+Description=WB Voronka (Chainy Master)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ivanc1539
+WorkingDirectory=/home/ivanc1539/wb-salles-funnel
+ExecStart=/usr/bin/node --experimental-sqlite --disable-warning=ExperimentalWarning src/server.mjs
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

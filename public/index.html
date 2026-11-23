@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WB Воронка — Чайный Мастер</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <header class="topbar hidden" id="topbar">
+      <div class="brand">WB Воронка <span>Чайный Мастер</span></div>
+      <nav class="tabs" id="tabs">
+        <a href="#/" data-tab="summary">Сводка</a>
+        <a href="#/strategies" data-tab="strategies">Стратегии</a>
+        <a href="#/journal" data-tab="journal">Журнал</a>
+        <a href="#/settings" data-tab="settings">Настройки</a>
+      </nav>
+      <div class="actions">
+        <span class="sync-status" id="syncStatus"></span>
+        <button class="btn ghost" id="btnSync" type="button">Обновить данные</button>
+        <button class="btn" id="btnClaude" type="button">Сводка для Claude</button>
+        <button class="btn ghost" id="btnLogout" type="button">Выйти</button>
+      </div>
+    </header>
+    <div class="mock-banner hidden" id="mockBanner">Тестовый режим: показаны выдуманные данные. Настоящие появятся после подключения токена WB.</div>
+    <main id="app" class="app"></main>
+    <div class="toast hidden" id="toast"></div>
+    <script src="charts.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
