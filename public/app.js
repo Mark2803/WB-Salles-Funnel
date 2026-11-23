@@ -25,7 +25,7 @@
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
     if (res.status === 401 && path !== 'login') {
-      showLogin();
+      showLogin('Время доступа закончилось. Откройте инструмент заново через админку → «Менеджмент».');
       throw new Error('Нужно войти');
     }
     if (opts.raw) return res;
@@ -51,28 +51,25 @@
     root.querySelectorAll('[data-w]').forEach((e) => (e.style.width = `${Math.max(0, Math.min(100, Number(e.dataset.w)))}%`));
   }
 
-  // ---------- Вход ----------
-  function showLogin() {
+  // ---------- Вход (через «Менеджмент» админки) ----------
+  // Админка после ввода PIN открывает инструмент по адресу …/#t=ТОКЕН.
+  // Токен сразу обмениваем на сессию инструмента и убираем из адресной строки.
+  function takeTokenFromUrl() {
+    const m = location.hash.match(/(?:^#|&)t=([^&]+)/);
+    if (!m) return null;
+    history.replaceState(null, '', `${location.pathname}${location.search}#/`);
+    return decodeURIComponent(m[1]);
+  }
+
+  function showLogin(message) {
     document.getElementById('topbar').classList.add('hidden');
     $app.innerHTML = `
-      <form class="login" id="loginForm">
+      <div class="login">
         <h2>WB Воронка</h2>
-        <p class="muted">Инструмент магазина «Чайный Мастер» на Wildberries</p>
-        <input type="password" id="pwd" placeholder="Пароль" autocomplete="current-password" required />
-        <button class="btn" type="submit">Войти</button>
-        <div class="error" id="loginErr"></div>
-      </form>`;
-    document.getElementById('pwd').focus();
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      try {
-        await api('login', { method: 'POST', body: { password: document.getElementById('pwd').value } });
-        location.hash = '#/';
-        boot();
-      } catch (err) {
-        document.getElementById('loginErr').textContent = err.message;
-      }
-    });
+        <p>${esc(message || 'Доступ закрыт. Откройте инструмент через админку → «Менеджмент» (ввод PIN) → карточка «Воронка продаж WB».')}</p>
+        <p><a class="btn" href="/admin/management">Открыть «Менеджмент»</a></p>
+        <p class="small muted">Доступ действует 60 минут после ввода PIN, как у остальных инструментов «Менеджмента».</p>
+      </div>`;
   }
 
   // ---------- Верхняя панель ----------
@@ -119,7 +116,7 @@
   });
   document.getElementById('btnLogout').addEventListener('click', async () => {
     await api('logout', { method: 'POST' }).catch(() => {});
-    showLogin();
+    showLogin('Вы вышли. Чтобы вернуться, откройте инструмент через админку → «Менеджмент».');
   });
 
   function showTextModal(text) {
@@ -145,7 +142,7 @@
       if (err.message !== 'Нужно войти') $app.innerHTML = `<div class="panel"><b>Ошибка:</b> ${esc(err.message)}</div>`;
     }
   }
-  window.addEventListener('hashchange', route);
+  window.addEventListener('hashchange', () => (/(?:^#|&)t=/.test(location.hash) ? boot() : route()));
 
   // ---------- Сводка ----------
   async function viewSummary() {
@@ -714,6 +711,14 @@
   // ---------- Запуск ----------
   async function boot() {
     try {
+      const token = takeTokenFromUrl();
+      if (token) {
+        try {
+          await api('login', { method: 'POST', body: { token } });
+        } catch (err) {
+          return showLogin(err.message);
+        }
+      }
       const me = await api('me');
       if (!me.authenticated) return showLogin();
       document.getElementById('topbar').classList.remove('hidden');

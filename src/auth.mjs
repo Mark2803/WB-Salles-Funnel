@@ -1,39 +1,17 @@
-// Вход по паролю. Пароль хранится только в виде хэша (scrypt) в .env.
-// Сессия — подписанная cookie (HMAC-SHA256) со сроком действия 12 часов.
+// Сессия инструмента — подписанная cookie (HMAC-SHA256).
+// Выдаётся после проверки токена из «Менеджмента» (см. management-auth.mjs) и живёт столько же, сколько этот токен.
 import crypto from 'node:crypto';
 
 const SESSION_HOURS = 12;
 export const COOKIE_NAME = 'wb_funnel_session';
 
-export function hashPassword(password) {
-  const salt = crypto.randomBytes(16);
-  const N = 16384;
-  const key = crypto.scryptSync(password, salt, 64, { N, r: 8, p: 1 });
-  return `scrypt$${N}$${salt.toString('base64')}$${key.toString('base64')}`;
-}
-
-export function verifyPassword(password, stored) {
-  if (typeof password !== 'string' || !stored) return false;
-  const parts = stored.split('$');
-  if (parts.length !== 4 || parts[0] !== 'scrypt') return false;
-  const N = Number(parts[1]);
-  const salt = Buffer.from(parts[2], 'base64');
-  const expected = Buffer.from(parts[3], 'base64');
-  let actual;
-  try {
-    actual = crypto.scryptSync(password, salt, expected.length, { N, r: 8, p: 1 });
-  } catch {
-    return false;
-  }
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
-}
-
 function sign(payload, secret) {
   return crypto.createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
-export function createSession(secret, now = Date.now()) {
-  const payload = Buffer.from(JSON.stringify({ exp: now + SESSION_HOURS * 3600_000 })).toString('base64url');
+export function createSession(secret, now = Date.now(), expMs = now + SESSION_HOURS * 3600_000) {
+  const exp = Math.min(expMs, now + SESSION_HOURS * 3600_000);
+  const payload = Buffer.from(JSON.stringify({ exp })).toString('base64url');
   return `${payload}.${sign(payload, secret)}`;
 }
 

@@ -2,20 +2,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { openDb } from '../src/db.mjs';
-import { hashPassword } from '../src/auth.mjs';
 import { createServer } from '../src/server.mjs';
 import { runSync } from '../src/sync.mjs';
 import { createMockClient, createMockCostsSource } from '../src/wb/mock.mjs';
 
 const NM = [1293796729, 1293819178, 1293550875];
-const cfg = { mock: true, wbToken: '', passwordHash: hashPassword('пароль-для-теста'), sessionSecret: 'x'.repeat(40), trackedNmIds: NM, basePath: '/management/wb-funnel', cookieSecure: false };
+const cfg = { mock: true, wbToken: '', sessionSecret: 'x'.repeat(40), trackedNmIds: NM, basePath: '/management/wb-funnel', cookieSecure: false };
 const quiet = { warn() {}, error() {}, log() {} };
 
 test('API: вход, сбор, сводка, симулятор, планы, журнал', async () => {
   const db = openDb('', { memory: true });
   const run = await runSync(db, { kind: 'full', client: createMockClient({ nmIds: NM }), costsSource: createMockCostsSource(), nmIds: NM, log: quiet });
   assert.equal(run.status, 'ok', JSON.stringify(run.details.filter((d) => !d.ok)));
-  const server = createServer({ db, cfg, log: quiet });
+  const TOKEN = 'T'.repeat(43);
+  const server = createServer({ db, cfg, log: quiet, verifyToken: async (t) => (t === TOKEN ? Date.now() + 3600_000 : null) });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   let cookie = '';
@@ -38,8 +38,8 @@ test('API: вход, сбор, сводка, симулятор, планы, ж�
   };
   try {
     assert.equal((await call('GET', '/api/overview')).status, 401);
-    assert.equal((await call('POST', '/api/login', { password: 'неверно' })).status, 401);
-    assert.equal((await call('POST', '/api/login', { password: 'пароль-для-теста' })).status, 200);
+    assert.equal((await call('POST', '/api/login', { token: 'неверно' })).status, 401);
+    assert.equal((await call('POST', '/api/login', { token: TOKEN })).status, 200);
     assert.match(cookie, /^wb_funnel_session=/);
 
     const ov = await call('GET', '/api/overview');

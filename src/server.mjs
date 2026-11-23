@@ -18,8 +18,8 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'SAMEORIGIN',
 };
 
-export function createServer({ db, cfg = config, log = console }) {
-  const api = createApi({ db, cfg, log });
+export function createServer({ db, cfg = config, log = console, verifyToken }) {
+  const api = createApi({ db, cfg, log, verifyToken });
   return http.createServer(async (req, res) => {
     for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
     const url = new URL(req.url, 'http://localhost');

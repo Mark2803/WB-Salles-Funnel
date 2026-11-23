@@ -2,7 +2,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseEnv } from '../src/config.mjs';
-import { hashPassword, verifyPassword, createSession, checkSession } from '../src/auth.mjs';
+import { createSession, checkSession } from '../src/auth.mjs';
+import { createManagementVerifier, pgEnvFromUrl, isTokenShape } from '../src/management-auth.mjs';
 import { DEFAULT_SETTINGS } from '../src/db.mjs';
 import { unitEconomics } from '../src/metrics.mjs';
 import { simulate, STRATEGIES, normalizeParams } from '../src/strategies.mjs';
@@ -17,17 +18,44 @@ test('разбор .env', () => {
   assert.deepEqual(env, { A: '1', B: 'два', C: 'x=y' });
 });
 
-test('пароль и сессия', () => {
-  const h = hashPassword('очень-длинный-пароль');
-  assert.ok(verifyPassword('очень-длинный-пароль', h));
-  assert.ok(!verifyPassword('другой', h));
-  assert.ok(!verifyPassword('x', 'мусор'));
+test('сессия', () => {
   const secret = 's'.repeat(40);
   const token = createSession(secret, 1000);
   assert.ok(checkSession(token, secret, 2000));
   assert.ok(!checkSession(token, secret, 1000 + 13 * 3600_000), 'сессия истекает через 12 часов');
   assert.ok(!checkSession(token, 'другой-секрет'.repeat(4), 2000));
   assert.ok(!checkSession(token.replace(/.$/, 'A'), secret, 2000) || token.endsWith('A'));
+  // сессия не живёт дольше токена «Менеджмента»
+  const short = createSession(secret, 1000, 1000 + 60 * 60_000);
+  assert.ok(checkSession(short, secret, 1000 + 59 * 60_000));
+  assert.ok(!checkSession(short, secret, 1000 + 61 * 60_000));
+});
+
+test('вход из «Менеджмента»: проверка токена по базе через psql', async () => {
+  const env = pgEnvFromUrl('postgresql://tea_user:p%40ss@localhost:5433/tea_market?schema=public');
+  assert.deepEqual([env.PGHOST, env.PGPORT, env.PGUSER, env.PGPASSWORD, env.PGDATABASE], ['localhost', '5433', 'tea_user', 'p@ss', 'tea_market']);
+  assert.ok(isTokenShape('Ab_-'.repeat(11)));
+  assert.ok(!isTokenShape("x'; drop table--"));
+  const calls = [];
+  const future = Date.now() + 30 * 60_000;
+  const execImpl = (cmd, args, opts, cb) => {
+    calls.push({ cmd, args, opts });
+    const sql = args.at(-1);
+    cb(null, sql.includes(require_hash) ? `${future}\n` : '', '');
+  };
+  const crypto = await import('node:crypto');
+  const good = 'A'.repeat(43);
+  const require_hash = crypto.createHash('sha256').update(good).digest('hex');
+  const verify = createManagementVerifier({ databaseUrl: 'postgresql://u:secret@localhost/db', execImpl });
+  assert.equal(await verify(good), future);
+  assert.equal(await verify('B'.repeat(43)), null);
+  assert.equal(await verify("bad token'"), null);
+  assert.equal(calls.length, 2, 'кривой токен до базы не доходит');
+  assert.equal(calls[0].cmd, 'psql');
+  assert.ok(!calls[0].args.join(' ').includes('secret'), 'пароль базы не в командной строке');
+  assert.equal(calls[0].opts.env.PGPASSWORD, 'secret');
+  const failing = createManagementVerifier({ databaseUrl: 'postgresql://u:p@h/db', execImpl: (c, a, o, cb) => cb(new Error('boom'), '', 'connection refused') });
+  await assert.rejects(() => failing(good), /Не удалось проверить доступ/);
 });
 
 test('даты', () => {

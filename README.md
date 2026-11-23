@@ -2,7 +2,7 @@
 
 Следит за воронкой продаж по выбранным артикулам WB, считает юнит-экономику и помогает выбирать стратегии продвижения: симулятор показывает, как изменятся заказы и прибыль, а после запуска — «план против факта».
 
-Адрес после установки: **https://tea-master-team.ru/management/wb-funnel/** (вход по паролю).
+Адрес после установки: **https://tea-master-team.ru/management/wb-funnel/**. Вход — как у остальных инструментов: админка → «Менеджмент» (PIN) → карточка **«Воронка продаж WB»**. Отдельного пароля нет; доступ действует 60 минут после ввода PIN.
 
 **Репозиторий публичный — токен WB, пароли, id таблицы сюда не класть** (только в `.env` на сервере).
 
@@ -49,6 +49,7 @@ src/strategies.mjs  стратегии и симулятор
 src/summary.mjs     «Сводка для Claude»
 src/costs.mjs       себестоимость из листа «Себестоимость»
 src/google-sheets.mjs  чтение Google Таблицы роботом (только чтение)
+src/management-auth.mjs  вход через «Менеджмент»: проверка пропуска по базе сайта (psql)
 public/             страница (HTML, JS, CSS)
 tests/              автотесты (npm test)
 deploy/             служба systemd и настройка nginx
@@ -67,13 +68,14 @@ deploy/             служба systemd и настройка nginx
    $U git clone https://github.com/Mark2803/WB-Salles-Funnel.git wb-salles-funnel
    cd wb-salles-funnel
    $U cp .env.example .env
-   $U npm run hash-password
+   $U node -e "console.log('SESSION_SECRET=' + require('crypto').randomBytes(32).toString('base64url'))"
    ```
-   Последняя команда попросит придумать пароль для входа и выведет две строки `ADMIN_PASSWORD_HASH=…` и `SESSION_SECRET=…`.
+   Последняя команда выведет строку `SESSION_SECRET=…` — она понадобится в шаге 3.
 
 3. **Настройки.** Откройте `.env` (`nano .env`) и заполните:
    - `WB_API_TOKEN=` — токен из шага 1;
-   - две строки из шага 2;
+   - строку `SESSION_SECRET=…` из шага 2;
+   - `DATABASE_URL=` — как в `/home/ivanc1539/tea-market-v2/backend/.env` (нужен для входа через «Менеджмент»; проверьте, что есть `psql`: `which psql`);
    - `COSTS_SPREADSHEET_ID=` — как `SPREADSHEET_ID` в `/home/ivanc1539/managment/backend/.env` (таблица «Финансы V3»).
    Ключ робота Google уже лежит у Менеджмента: `ls -l /home/ivanc1539/managment-secrets/google-key.json` — путь в `.env` менять не нужно.
    Остальное оставить как есть. Проверьте, что порт 3300 свободен: `ss -ltnp | grep 3300` (ничего не выводит — свободен; 3100 и 3200 уже заняты Менеджментом и финансовой аналитикой).
@@ -99,7 +101,7 @@ deploy/             служба systemd и настройка nginx
    cp deploy/nginx-wb-funnel.conf /home/ivanc1539/conf/web/tea-master-team.ru/nginx.ssl.conf_wb-funnel
    nginx -t && systemctl reload nginx
    ```
-   Откройте https://tea-master-team.ru/management/wb-funnel/.
+7. **Карточка в админке** появляется после выкладки сайта (TeaMarketV2, ветка `рефакторинг`) по его инструкции. Проверка: админка → «Менеджмент» → PIN → «Воронка продаж WB».
 
 ## Обновление
 
@@ -114,7 +116,7 @@ systemctl restart wb-funnel
 
 ## Проверка без токена
 
-`WB_MOCK=1 npm start` — тестовые данные (выдуманные), удобно для проверки интерфейса.
+`WB_MOCK=1 npm start` — тестовые данные (выдуманные), вход по адресу `http://127.0.0.1:3300/#t=test-token-for-mock-mode`.
 
 ## Журналы и ошибки
 

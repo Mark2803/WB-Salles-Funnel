@@ -12,7 +12,6 @@
     "dev": "WB_MOCK=1 node --experimental-sqlite --disable-warning=ExperimentalWarning src/server.mjs",
     "collect": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/collect-once.mjs",
     "check": "node --experimental-sqlite --disable-warning=ExperimentalWarning scripts/check-token.mjs",
-    "hash-password": "node scripts/hash-password.mjs",
     "test": "node --experimental-sqlite --disable-warning=ExperimentalWarning --test tests/*.test.mjs"
   }
 }

@@ -45,7 +45,8 @@ export const config = {
   port: Number(env('PORT', '3300')),
   basePath: env('BASE_PATH', '/management/wb-funnel').replace(/\/$/, '') || '/',
   wbToken: env('WB_API_TOKEN', ''),
-  passwordHash: env('ADMIN_PASSWORD_HASH', ''),
+  // База сайта Чайного Маркета — только для проверки входа из «Менеджмента»
+  databaseUrl: env('DATABASE_URL', ''),
   sessionSecret: env('SESSION_SECRET', ''),
   dataDir: path.resolve(ROOT_DIR, env('DATA_DIR', './data')),
   trackedNmIds: parseIds(env('TRACKED_NM_IDS', '')),
@@ -62,7 +63,7 @@ export const config = {
 export function checkConfig(cfg = config) {
   const errors = [];
   const warnings = [];
-  if (!cfg.passwordHash) errors.push('Не задан ADMIN_PASSWORD_HASH (пароль для входа). Выполните: npm run hash-password');
+  if (!cfg.mock && !cfg.databaseUrl) errors.push('Не задан DATABASE_URL — без него не проверить вход из «Менеджмента» (взять из /home/ivanc1539/tea-market-v2/backend/.env)');
   if (!cfg.sessionSecret || cfg.sessionSecret.length < 32) errors.push('SESSION_SECRET должен быть не короче 32 символов');
   if (!cfg.trackedNmIds.length) errors.push('TRACKED_NM_IDS пуст — укажите артикулы WB через запятую');
   if (!cfg.mock && !cfg.wbToken) warnings.push('Не задан WB_API_TOKEN — сбор данных работать не будет');

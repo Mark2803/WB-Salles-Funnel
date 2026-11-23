@@ -9,9 +9,9 @@ import {
   registerFailedLogin,
   resetLogin,
   sessionCookie,
-  verifyPassword,
   SESSION_MAX_AGE_SEC,
 } from './auth.mjs';
+import { createManagementVerifier, createMockVerifier } from './management-auth.mjs';
 import { getSettings, saveSettings, nowIso } from './db.mjs';
 import { addDays, isDate, todayMsk } from './dates.mjs';
 import { baselineFor, overview, productSeries, productSummary } from './metrics.mjs';
@@ -73,7 +73,8 @@ function nmIdParam(value, db) {
 
 const text = (v, max = 2000) => String(v ?? '').trim().slice(0, max);
 
-export function createApi({ db, cfg, log = console }) {
+export function createApi({ db, cfg, log = console, verifyToken }) {
+  const verify = verifyToken || (cfg.mock ? createMockVerifier() : createManagementVerifier({ databaseUrl: cfg.databaseUrl }));
   const routes = [];
   const route = (method, pattern, handler, { auth = true } = {}) => {
     const keys = [];
@@ -90,13 +91,21 @@ export function createApi({ db, cfg, log = console }) {
     async ({ req, body, res }) => {
       const ip = clientIp(req);
       if (!loginAllowed(ip)) throw new HttpError(429, 'TOO_MANY', 'Слишком много попыток. Подождите 10 минут.');
-      if (!verifyPassword(body.password, cfg.passwordHash)) {
+      let exp = null;
+      try {
+        exp = await verify(body.token);
+      } catch (err) {
+        log.error?.(`[auth] ${err.message}`);
+        throw new HttpError(503, 'AUTH_UNAVAILABLE', 'Не удалось проверить доступ. Попробуйте ещё раз через минуту.');
+      }
+      if (!exp) {
         registerFailedLogin(ip);
-        throw new HttpError(401, 'BAD_PASSWORD', 'Неверный пароль');
+        throw new HttpError(401, 'MANAGEMENT_LOCKED', 'Доступ закрыт. Откройте инструмент заново через админку → «Менеджмент» (ввод PIN).');
       }
       resetLogin(ip);
-      res.setHeader('Set-Cookie', sessionCookie(createSession(cfg.sessionSecret), { secure: cfg.cookieSecure, path: cfg.basePath, maxAgeSec: SESSION_MAX_AGE_SEC }));
-      return { ok: true };
+      const maxAgeSec = Math.max(60, Math.min(SESSION_MAX_AGE_SEC, Math.floor((exp - Date.now()) / 1000)));
+      res.setHeader('Set-Cookie', sessionCookie(createSession(cfg.sessionSecret, Date.now(), exp), { secure: cfg.cookieSecure, path: cfg.basePath, maxAgeSec }));
+      return { ok: true, expiresAt: new Date(exp).toISOString() };
     },
     { auth: false },
   );
