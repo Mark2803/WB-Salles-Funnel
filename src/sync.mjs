@@ -1,7 +1,7 @@
 // Запуск сбора данных: «быстрый» (воронка, остатки, цены, реклама) каждые N часов
 // и «полный» (плюс отзывы, финотчёт, поисковые запросы) раз в сутки.
 import { config } from './config.mjs';
-import { nowIso, ensureProducts } from './db.mjs';
+import { nowIso, ensureProducts, getMeta, setMeta } from './db.mjs';
 import { todayMsk } from './dates.mjs';
 import { createWbClient } from './wb/client.mjs';
 import { createMockClient } from './wb/mock.mjs';
@@ -37,15 +37,53 @@ export function isSyncRunning() {
   return Boolean(running);
 }
 
-export async function runSync(db, { kind = 'quick', client = makeClient(), costsSource = makeCostsSource(), nmIds = config.trackedNmIds, today = todayMsk(), log = console } = {}) {
+const TRACKED_KEY = 'tracked_nm_ids';
+
+/** Последний известный список отслеживаемых товаров (для запуска сервера до первого сбора). */
+export function savedTrackedNmIds(db, fallback = config.trackedNmIds) {
+  const saved = getMeta(db, TRACKED_KEY);
+  return Array.isArray(saved) ? saved : fallback;
+}
+
+/**
+ * Какие товары отслеживать: галочки «Воронка WB» в Менеджменте (колонка в листе «Себестоимость»).
+ * Пока колонки нет — TRACKED_NM_IDS из .env. Если таблица недоступна — последний известный список.
+ */
+export async function resolveTrackedNmIds(db, { costsSource, fallback = config.trackedNmIds, log = console } = {}) {
+  try {
+    const tracked = costsSource?.readTracked ? await costsSource.readTracked() : { hasColumn: false, nmIds: [] };
+    if (tracked.hasColumn) {
+      setMeta(db, TRACKED_KEY, tracked.nmIds);
+      return { nmIds: tracked.nmIds, source: 'sheet' };
+    }
+    return { nmIds: fallback, source: 'env' };
+  } catch (err) {
+    log.warn?.(`[sync] список товаров из таблицы не прочитан: ${err.message}`);
+    const saved = getMeta(db, TRACKED_KEY);
+    return Array.isArray(saved) ? { nmIds: saved, source: 'saved', error: err.message } : { nmIds: fallback, source: 'env', error: err.message };
+  }
+}
+
+const SOURCE_LABEL = { sheet: 'галочки «Воронка WB» в Менеджменте', env: 'TRACKED_NM_IDS в .env', saved: 'последний известный список (таблица недоступна)' };
+
+export async function runSync(db, { kind = 'quick', client = makeClient(), costsSource = makeCostsSource(), nmIds: givenNmIds, today = todayMsk(), log = console } = {}) {
   if (running) return { alreadyRunning: true, runId: running };
+  const tracked = givenNmIds ? { nmIds: givenNmIds, source: 'env' } : await resolveTrackedNmIds(db, { costsSource, log });
+  const nmIds = tracked.nmIds;
   ensureProducts(db, nmIds);
   const steps = kind === 'full' ? FULL : QUICK;
   const runId = Number(db.prepare('INSERT INTO sync_runs(started_at, status, kind) VALUES (?,?,?)').run(nowIso(), 'running', kind).lastInsertRowid);
   running = runId;
-  const details = [];
+  const details = [{
+    step: 'products',
+    label: 'Список товаров',
+    ok: !tracked.error,
+    ...(tracked.error ? { error: tracked.error } : {}),
+    result: { count: nmIds.length, source: SOURCE_LABEL[tracked.source] },
+    ms: 0,
+  }];
   try {
-    for (const key of steps) {
+    for (const key of nmIds.length ? steps : []) {
       const step = STEPS[key];
       const startedAt = Date.now();
       try {

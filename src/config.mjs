@@ -65,7 +65,8 @@ export function checkConfig(cfg = config) {
   const warnings = [];
   if (!cfg.mock && !cfg.databaseUrl) errors.push('Не задан DATABASE_URL — без него не проверить вход из «Менеджмента» (взять из /home/ivanc1539/tea-market-v2/backend/.env)');
   if (!cfg.sessionSecret || cfg.sessionSecret.length < 32) errors.push('SESSION_SECRET должен быть не короче 32 символов');
-  if (!cfg.trackedNmIds.length) errors.push('TRACKED_NM_IDS пуст — укажите артикулы WB через запятую');
+  const sheetConfigured = Boolean(cfg.googleKeyFile && cfg.costsSpreadsheetId);
+  if (!cfg.trackedNmIds.length && !sheetConfigured) errors.push('Нет списка товаров: задайте TRACKED_NM_IDS или подключите таблицу (галочки «Воронка WB» в Менеджменте)');
   if (!cfg.mock && !cfg.wbToken) warnings.push('Не задан WB_API_TOKEN — сбор данных работать не будет');
   if (!cfg.mock && (!cfg.googleKeyFile || !cfg.costsSpreadsheetId)) warnings.push('Не заданы GOOGLE_SERVICE_ACCOUNT_FILE / COSTS_SPREADSHEET_ID — себестоимость из таблицы подтягиваться не будет');
   if (cfg.mock) warnings.push('Включён тестовый режим WB_MOCK=1 — данные выдуманные');

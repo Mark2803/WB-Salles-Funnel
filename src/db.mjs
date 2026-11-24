@@ -170,6 +170,10 @@ const MIGRATIONS = [
   ALTER TABLE products ADD COLUMN cost_source TEXT;
   ALTER TABLE products ADD COLUMN cost_updated_at TEXT;
   `,
+  // 3 — служебные значения (последний список отслеживаемых товаров из таблицы)
+  `
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {
@@ -232,11 +236,25 @@ export function saveSettings(db, patch) {
 export function ensureProducts(db, nmIds) {
   const stmt = db.prepare('INSERT INTO products(nm_id, sort, updated_at) VALUES (?, ?, ?) ON CONFLICT(nm_id) DO NOTHING');
   nmIds.forEach((id, i) => stmt.run(id, i, nowIso()));
-  // Артикулы, убранные из TRACKED_NM_IDS, скрываем (данные не удаляем)
+  // Товары, убранные из списка (галочка «Воронка WB» в Менеджменте или TRACKED_NM_IDS), скрываем — данные не удаляем
   const placeholders = nmIds.map(() => '?').join(',') || 'NULL';
   db.prepare(`UPDATE products SET active = CASE WHEN nm_id IN (${placeholders}) THEN 1 ELSE 0 END`).run(...nmIds);
   const order = db.prepare('UPDATE products SET sort = ? WHERE nm_id = ?');
   nmIds.forEach((id, i) => order.run(i, id));
+}
+
+export function getMeta(db, key) {
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get(key);
+  if (!row) return null;
+  try {
+    return JSON.parse(row.value);
+  } catch {
+    return null;
+  }
+}
+
+export function setMeta(db, key, value) {
+  db.prepare('INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, JSON.stringify(value));
 }
 
 export function transaction(db, fn) {

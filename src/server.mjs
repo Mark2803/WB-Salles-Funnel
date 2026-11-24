@@ -6,7 +6,7 @@ import path from 'node:path';
 import { config, checkConfig, ROOT_DIR } from './config.mjs';
 import { openDb, ensureProducts } from './db.mjs';
 import { createApi } from './api.mjs';
-import { startScheduler } from './sync.mjs';
+import { savedTrackedNmIds, startScheduler } from './sync.mjs';
 
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
@@ -59,10 +59,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   }
   const db = openDb(config.dataDir);
-  ensureProducts(db, config.trackedNmIds);
+  const startNmIds = savedTrackedNmIds(db);
+  ensureProducts(db, startNmIds);
   const server = createServer({ db });
   server.listen(config.port, config.host, () => {
-    console.log(`WB воронка запущена: http://${config.host}:${config.port} (артикулов: ${config.trackedNmIds.length}${config.mock ? ', ТЕСТОВЫЙ РЕЖИМ' : ''})`);
+    console.log(`WB воронка запущена: http://${config.host}:${config.port} (артикулов: ${startNmIds.length}${config.mock ? ', ТЕСТОВЫЙ РЕЖИМ' : ''})`);
   });
   startScheduler(db);
   const stop = () => {

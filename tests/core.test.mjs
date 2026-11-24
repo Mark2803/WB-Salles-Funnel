@@ -249,3 +249,25 @@ test('чтение Google Таблицы роботом: подпись JWT и �
     fs.unlinkSync(keyFile);
   }
 });
+
+test('список товаров: колонка «Воронка WB», запасные варианты', async () => {
+  const { parseTrackedNmIds } = await import('../src/costs.mjs');
+  const { resolveTrackedNmIds, savedTrackedNmIds } = await import('../src/sync.mjs');
+  const { openDb } = await import('../src/db.mjs');
+  assert.deepEqual(parseTrackedNmIds([['Артикул', 'Себестоимость']]), { hasColumn: false, nmIds: [] });
+  assert.deepEqual(
+    parseTrackedNmIds([['Артикул', 'Себестоимость', 'Воронка WB'], ['A', 1, 1293530574], ['B', 2, ''], ['C', 3, '1293550875'], ['D', 4, 1293530574]]),
+    { hasColumn: true, nmIds: [1293530574, 1293550875] },
+  );
+  const quiet = { warn() {} };
+  const db = openDb('', { memory: true });
+  // колонки нет — список из .env
+  assert.deepEqual(await resolveTrackedNmIds(db, { costsSource: { readTracked: async () => ({ hasColumn: false, nmIds: [] }) }, fallback: [1], log: quiet }), { nmIds: [1], source: 'env' });
+  // колонка есть — из таблицы, и список запоминается
+  assert.deepEqual(await resolveTrackedNmIds(db, { costsSource: { readTracked: async () => ({ hasColumn: true, nmIds: [7, 8] }) }, fallback: [1], log: quiet }), { nmIds: [7, 8], source: 'sheet' });
+  assert.deepEqual(savedTrackedNmIds(db, [1]), [7, 8]);
+  // таблица недоступна — последний известный список
+  const r = await resolveTrackedNmIds(db, { costsSource: { readTracked: async () => { throw new Error('нет связи'); } }, fallback: [1], log: quiet });
+  assert.deepEqual([r.nmIds, r.source], [[7, 8], 'saved']);
+  db.close();
+});

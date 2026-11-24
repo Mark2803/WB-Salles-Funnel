@@ -175,5 +175,9 @@ export function createMockCostsSource() {
     'SMOLA-SMILE-3,5': 89, 'SMOLA-SMILE-7': 144.5, 'SMOLA-SMILE-10,5': 202.5, 'SMOLA-SMILE-17,5': 318.2, 'SMOLA-SMILE-35': 605.5,
     'SMOLA-GABA-2': 68, 'SMOLA-GABA-6': 131.5, 'SMOLA-GABA-10': 189, 'SMOLA-GABA-15': 261, 'SMOLA-GABA-20': 333,
   };
-  return { read: async () => new Map(Object.entries(rows).map(([a, cost]) => [a.toUpperCase(), { article: a, name: '', cost, raw: cost }])) };
+  return {
+    read: async () => new Map(Object.entries(rows).map(([a, cost]) => [a.toUpperCase(), { article: a, name: '', cost, raw: cost }])),
+    // В тестовом режиме колонки «Воронка WB» нет — берётся TRACKED_NM_IDS
+    readTracked: async () => ({ hasColumn: false, nmIds: [] }),
+  };
 }

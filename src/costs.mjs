@@ -31,6 +31,22 @@ export function parseCostSheet(values) {
   return map;
 }
 
+// Колонка «Воронка WB» (её ведёт Менеджмент → «Товары и остатки», галочка «Воронка WB»):
+// в ней артикул WB (nmID) товаров, которые отслеживает воронка. Пусто — не отслеживается.
+export const FUNNEL_HEADER = 'Воронка WB';
+
+export function parseTrackedNmIds(values) {
+  const header = (values[0] ?? []).map((v) => String(v ?? '').trim());
+  const col = header.indexOf(FUNNEL_HEADER);
+  if (col === -1) return { hasColumn: false, nmIds: [] };
+  const nmIds = [];
+  for (const line of values.slice(1)) {
+    const n = Number(String(line[col] ?? '').replace(/\s/g, ''));
+    if (Number.isInteger(n) && n > 0 && !nmIds.includes(n)) nmIds.push(n);
+  }
+  return { hasColumn: true, nmIds };
+}
+
 // Проставляет себестоимость отслеживаемым товарам по артикулу продавца
 export function applyCosts(db, map) {
   const products = db.prepare('SELECT nm_id, vendor_code FROM products WHERE active = 1').all();
@@ -57,7 +73,11 @@ export function applyCosts(db, map) {
 
 export function createCostsSource(cfg) {
   const reader = createSheetsReader({ keyFile: cfg.googleKeyFile, spreadsheetId: cfg.costsSpreadsheetId });
-  return { read: async () => parseCostSheet(await reader.getValues(sheetRange(cfg.costsSheet, 'A1:Z'))) };
+  const values = () => reader.getValues(sheetRange(cfg.costsSheet, 'A1:ZZ'));
+  return {
+    read: async () => parseCostSheet(await values()),
+    readTracked: async () => parseTrackedNmIds(await values()),
+  };
 }
 
 // Шаг сбора данных: читает лист и обновляет себестоимость
