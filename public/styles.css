@@ -38,7 +38,7 @@ a { color: var(--accent); }
 .actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .sync-status { color: var(--muted); font-size: 12px; }
 .mock-banner { background: #fff6d6; color: #6b5200; padding: 8px 20px; border-bottom: 1px solid #f0dd9c; }
-.app { max-width: 1320px; margin: 0 auto; padding: 20px; }
+.app { width: 100%; margin: 0; padding: 20px clamp(16px, 3vw, 48px); }
 
 .btn { text-decoration: none; display: inline-block; border: 1px solid var(--accent); background: var(--accent); color: #fff; padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: 13px; }
 .btn:hover { filter: brightness(1.08); }
