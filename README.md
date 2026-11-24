@@ -112,7 +112,7 @@ runuser -u ivanc1539 -- npm test
 systemctl restart wb-funnel
 ```
 
-Резервная копия данных — один файл: `cp data/wb.sqlite /home/ivanc1539/backup-wb-$(date +%F).sqlite`.
+Резервные копии на сервере не делаем (решение Марка 24.11.2026). Откат — через Git: `runuser -u ivanc1539 -- git checkout -f ПРЕЖНИЙ_КОММИТ && systemctl restart wb-funnel` (сборки нет, код запускается как есть). Собранные данные лежат в `data/wb.sqlite` и при откате кода не теряются; если файл пропадёт — данные WB за последние 7–30 дней соберутся заново.
 
 ## Проверка без токена
 
