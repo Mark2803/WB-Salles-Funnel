@@ -132,3 +132,21 @@ ul.plain li { margin-bottom: 4px; line-height: 1.4; }
 .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
 .kv div:nth-child(odd) { color: var(--muted); }
 .trunc { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Реклама */
+.ad-head { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.ad-head h2 { margin: 0 0 4px; }
+.ad-kpis { display: flex; gap: 18px; flex-wrap: wrap; }
+.ad-kpis div { display: flex; flex-direction: column; }
+table.data.compact td, table.data.compact th { padding: 6px 8px; }
+table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.data tr.total td { border-top: 2px solid var(--line); }
+table.data tr.current td { background: var(--accent-soft); }
+.bad { color: var(--red); }
+.good { color: var(--green); }
+.alerts li.good { background: #e3f5ea; }
+.ad-more { margin-top: 12px; }
+.ad-more summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.form-row.calc { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin: 8px 0; }
+.form-row.calc input { width: 140px; }
+.ok-line { background: #e3f5ea; padding: 8px 10px; border-radius: 8px; }

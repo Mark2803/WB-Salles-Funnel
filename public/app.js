@@ -135,6 +135,7 @@
     try {
       if (parts[0] === 'product' && parts[1]) return await viewProduct(Number(parts[1]));
       if (parts[0] === 'strategies') return await viewStrategies(params);
+      if (parts[0] === 'ads') return await viewAds(params);
       if (parts[0] === 'journal') return await viewJournal();
       if (parts[0] === 'settings') return await viewSettings();
       return await viewSummary();
@@ -201,7 +202,7 @@
               <td class="num">${pct(p.week.ads.drr)}</td>
               <td class="num">${p.weekProfit == null ? '<span class="muted small">нет себест.</span>' : rub(p.weekProfit)}</td>
               <td class="num">${p.snapshot.feedback_rating ? n(p.snapshot.feedback_rating, 1) : '—'}</td>
-              <td>${p.activePlan ? `<span class="tag">${esc(p.activePlan.title)}</span>` : '<span class="tag grey">нет</span>'}</td>
+              <td>${p.activePlan ? `<span class="tag">${esc(p.activePlan.title)}</span>` : ''}${(p.campaigns || []).map((c) => `<a class="tag ${c.status === 9 ? 'green' : 'grey'}" href="#/ads?c=${c.advertId}" title="${esc(c.name)}">Реклама: ${c.paymentType === 'cpm' ? 'показы' : 'клики'}${c.bid != null ? `, ${n(c.bid, 1)} ₽` : ''}${c.status === 11 ? ' (пауза)' : c.status === 4 ? ' (не запущена)' : ''}</a>`).join(' ')}${!p.activePlan && !(p.campaigns || []).length ? '<span class="tag grey">нет</span>' : ''}</td>
             </tr>`,
             )
             .join('')}</tbody>
@@ -252,6 +253,7 @@
       <div class="grid two">
         <div class="panel"><h2>Воронка за 7 дней</h2><div class="funnel">${funnelHtml}</div>
           <p class="small muted">Реклама за 7 дней: показы ${n(w.ads.views)}, клики ${n(w.ads.clicks)}, CTR ${pct(w.ads.ctr, 2)}, клик ${rub(w.ads.cpc)}, заказ через рекламу ${rub(w.ads.cpo)}, расход ${rub(w.ads.spend)}, ДРР ${pct(w.ads.drr)}.</p>
+          ${(s.campaigns || []).length ? `<p>${s.campaigns.map((c) => `<a class="btn ghost small" href="#/ads?c=${c.advertId}">Реклама «${esc(c.name)}»: прогноз и факт →</a>`).join(' ')}</p>` : ''}
         </div>
         <div class="panel"><h2>Что требует внимания</h2>
           ${s.alerts.length ? `<ul class="alerts">${s.alerts.map((a) => `<li class="${a.level}">${esc(a.text)}</li>`).join('')}</ul>` : '<p class="muted">Всё спокойно.</p>'}
@@ -414,6 +416,12 @@
                    <h3>Когда остановить</h3><ul class="plain">${strategy.stop.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>
             </div>
             <p class="small muted"><b>Риски:</b> ${esc(strategy.risks)}</p>
+            ${['ads_cpc', 'ads_cpm', 'combo'].includes(strategy.key) ? (() => {
+              const camps = (products.find((p) => p.nmId === nmId)?.campaigns || []);
+              return camps.length
+                ? `<p class="ok-line">Сейчас по этому товару идёт реклама: ${camps.map((c) => `<a href="#/ads?c=${c.advertId}">«${esc(c.name)}»</a> (${c.paymentType === 'cpm' ? 'оплата за показы' : 'оплата за клик'}${c.bid != null ? `, ставка ${n(c.bid, 1)} ₽` : ''})`).join(', ')}. Точный разбор кампании — прогноз, факт и советы — на вкладке «Реклама».</p>`
+                : '<p class="small muted">Рекламных кампаний по этому товару пока нет. Когда запустите кампанию в кабинете WB, она появится здесь и на вкладке «Реклама» после ближайшего сбора данных.</p>';
+            })() : ''}
           </div>
           <div class="grid two">
             <div class="panel"><h3>Параметры</h3><div id="params">${strategy.params
@@ -576,6 +584,160 @@
   }
 
   // ---------- Журнал ----------
+
+  // ---------- Реклама: каждая кампания — прогноз, факт, советы, калькулятор ----------
+  async function viewAds(params) {
+    setActiveTab('ads');
+    $app.innerHTML = '<p class="muted">Загрузка…</p>';
+    const d = await api('ads');
+    const focus = Number(params.get('c')) || null;
+    const items = focus ? [...d.items.filter((x) => x.campaign.advertId === focus), ...d.items.filter((x) => x.campaign.advertId !== focus)] : d.items;
+    if (!items.length) {
+      $app.innerHTML = `<h1>Реклама</h1><div class="panel"><p>Рекламных кампаний пока не видно.</p>
+        <p class="muted">Кампании подтягиваются из кабинета WB при каждом сборе данных (раз в 3 часа или по кнопке «Обновить данные»). Нужна категория токена «Продвижение».
+        Товары с действующей рекламой отслеживаются автоматически, даже без галочки «Воронка WB».</p></div>`;
+      return;
+    }
+    const r1 = (v, dgt = 1) => n(v, dgt);
+    const bidUnit = (c) => (c.paymentType === 'cpm' ? '₽ за 1000 показов' : '₽ за клик');
+    const levelCls = { critical: 'critical', warning: 'warning', info: 'info', good: 'good' };
+
+    const econTable = (it) => {
+      const u = it.unit;
+      const i = it.inputs;
+      const e = it.economics;
+      return `
+        <table class="data compact"><tbody>
+          <tr><td>Цена продажи (ваша, после скидки)</td><td class="num">${rub(i.price)}</td></tr>
+          <tr><td>Комиссия WB ${pct(u.commissionPct)} <span class="small muted">(${esc(u.commissionSource)})</span></td><td class="num">−${rub(i.price != null ? (i.price * u.commissionPct) / 100 : null)}</td></tr>
+          <tr><td>Эквайринг ${pct(u.acquiringPct)} и налог ${pct(u.taxPct)} <span class="small muted">(настройки)</span></td><td class="num">−${rub(i.price != null ? (i.price * (u.acquiringPct + u.taxPct)) / 100 : null)}</td></tr>
+          <tr><td>Логистика на проданную штуку <span class="small muted">(${esc(u.logisticsSource)}, с учётом невыкупов)</span></td><td class="num">−${rub(u.logisticsPerSold)}</td></tr>
+          <tr><td>Хранение и приёмка</td><td class="num">−${rub(u.storagePerSold)}</td></tr>
+          <tr><td>Себестоимость <span class="small muted">(«Финансы V3»)</span></td><td class="num">${u.cost != null ? `−${rub(u.cost)}` : '<span class="bad">не указана</span>'}</td></tr>
+          <tr class="total"><td>Прибыль с продажи до рекламы</td><td class="num"><b>${rub(u.profitPerUnit)}</b></td></tr>
+          <tr><td>× выкуп ${pct(u.buyoutPct, 0)} = <b>прибыль с заказа до рекламы</b></td><td class="num"><b>${rub(e.profitPerOrder)}</b></td></tr>
+          <tr><td>Это потолок ДРР: реклама дороже — в минус</td><td class="num">${pct(e.breakEvenDrrPct)}</td></tr>
+        </tbody></table>`;
+    };
+
+    const clickTable = (it) => {
+      const i = it.inputs;
+      const e = it.economics;
+      const c = it.campaign;
+      const rec = it.recommended;
+      return `
+        <table class="data compact"><tbody>
+          <tr><td>Ставка в кабинете</td><td class="num">${r1(i.bid)} ${bidUnit(c)}</td></tr>
+          <tr><td>Цена клика <span class="small muted">(${esc(i.chargeSource)}${c.paymentType === 'cpm' ? `; CTR ${pct(i.ctr * 100, 2)} — ${esc(i.ctrSource)}` : ''})</span></td><td class="num">${r1(e.cpc, 2)} ₽</td></tr>
+          <tr><td>Конверсия клика в заказ <span class="small muted">(${esc(i.crSource)})</span></td><td class="num">${pct(e.cr, 2)}</td></tr>
+          <tr><td>Заказ с рекламы стоит <span class="small muted">(цена клика ÷ конверсия)</span></td><td class="num">${rub(e.costPerOrder)}</td></tr>
+          <tr><td>ДРР <span class="small muted">(цена клика ÷ (конверсия × цена))</span></td><td class="num"><b>${pct(e.drrPct)}</b> <span class="small muted">цель ${pct(d.targetDrrPct, 0)}</span></td></tr>
+          <tr><td>Прибыль с заказа после рекламы</td><td class="num"><b class="${e.profitPerOrderAfterAds != null && e.profitPerOrderAfterAds < 0 ? 'bad' : ''}">${rub(e.profitPerOrderAfterAds)}</b> <span class="small muted">маржа ${pct(e.marginAfterAdsPct)}</span></td></tr>
+          <tr><td>Безубыточная ставка <span class="small muted">(выше — каждый заказ в минус)</span></td><td class="num">${r1(e.breakEvenBid)} ${bidUnit(c)}</td></tr>
+          <tr><td>Ставка под цель ДРР ${pct(d.targetDrrPct, 0)}</td><td class="num">${r1(e.targetBid)} ${bidUnit(c)}</td></tr>
+          ${rec ? `<tr><td>Рекомендации WB <span class="small muted">(конкурентная / лидеры / топ-2)</span></td><td class="num">${r1(rec.competitive)} / ${r1(rec.leaders)} / ${r1(rec.top2)} ₽</td></tr>` : ''}
+        </tbody></table>`;
+    };
+
+    const perDayLine = (p, label) => (p ? `<p><b>${label}:</b> ${n(p.clicks, 1)} кликов → ${n(p.orders, 2)} заказа → расход ${rub(p.spend)}, выручка ${rub(p.revenue)}, прибыль ${rub(p.profit)} в день · за 7 дней ≈ ${n(p.orders * 7, 1)} заказа и ${rub(p.profit != null ? p.profit * 7 : null)} прибыли</p>` : '<p class="muted">Объём в день не оценить: нет дневного лимита, бюджета и факта кликов.</p>');
+
+    const compareTable = (it) => {
+      if (!it.forecast) return '<p class="muted">Прогноз появится при ближайшем сборе данных.</p>';
+      const cmp = it.comparison;
+      const head = `<p class="small muted">Прогноз от ${esc(String(it.forecast.createdAt).slice(0, 10))}: ${esc(it.forecast.reason || '')}. Факт — в среднем за день с этой даты (${n(it.factSinceForecast?.days)} дн.).</p>`;
+      if (!cmp) return head + '<p class="muted">Факта после прогноза пока нет — сравнение появится после первых показов.</p>';
+      return head + `<table class="data compact"><thead><tr><th></th><th class="num">Прогноз</th><th class="num">Факт</th><th class="num">Разница</th></tr></thead><tbody>
+        ${cmp.map((r) => `<tr><td>${esc(r.label)}</td><td class="num">${n(r.plan, 2)}${r.unit ? ` ${r.unit}` : ''}</td><td class="num">${n(r.fact, 2)}${r.unit ? ` ${r.unit}` : ''}</td><td class="num ${r.good === false ? 'bad' : r.good ? 'good' : ''}">${r.deltaPct == null ? '—' : `${r.deltaPct > 0 ? '+' : ''}${r.deltaPct}%`}</td></tr>`).join('')}
+      </tbody></table>`;
+    };
+
+    const scenarioTable = (rows, c) => `<table class="data compact"><thead><tr><th class="num">Ставка</th><th class="num">Цена клика</th><th class="num">Клики/день</th><th class="num">Заказы/день</th><th class="num">Расход/день</th><th class="num">ДРР</th><th class="num">Прибыль с заказа</th><th class="num">Прибыль/день</th></tr></thead><tbody>
+      ${rows.map((s) => `<tr class="${s.current ? 'current' : ''}"><td class="num">${n(s.bid, 1)} ₽${s.current ? ' · сейчас' : ''}</td><td class="num">${n(s.cpc, 2)} ₽</td><td class="num">${n(s.perDay?.clicks, 1)}</td><td class="num">${n(s.perDay?.orders, 2)}</td><td class="num">${rub(s.perDay?.spend)}</td><td class="num ${s.drrPct != null && s.drrPct > d.targetDrrPct ? 'bad' : ''}">${pct(s.drrPct)}</td><td class="num ${s.profitPerOrderAfterAds != null && s.profitPerOrderAfterAds < 0 ? 'bad' : ''}">${rub(s.profitPerOrderAfterAds)}</td><td class="num">${rub(s.perDay?.profit)}</td></tr>`).join('')}
+      </tbody></table><p class="small muted">Ставка — ${bidUnit(c)}. Клики при другой ставке — допущение: растут медленнее ставки (×2 ставка ≈ ×1,6 кликов) и не больше дневного бюджета. Конверсия и цена — как сейчас.</p>`;
+
+    $app.innerHTML = `
+      <h1>Реклама</h1>
+      <p class="muted">По каждой кампании WB: из чего складывается прибыль, сколько стоит клик и заказ, прогноз при запуске и факт, что поменять. Расчёт по формулам юнит-экономики; комиссия — тариф WB по предмету или финотчёт, логистика — финотчёт или настройки. Допущения подписаны.</p>
+      ${items.map((it, idx) => {
+        const c = it.campaign;
+        const f = it.fact;
+        return `
+        <section class="panel ad-card" data-idx="${idx}">
+          <div class="ad-head">
+            <div>
+              <h2>${esc(shortTitle(it.product.title, it.product.vendorCode) || it.nmId)}</h2>
+              <p class="muted">«${esc(c.name)}» · ${esc(c.paymentLabel)} · <span class="tag ${c.status === 9 ? 'green' : 'grey'}">${esc(c.statusLabel)}</span>
+                ${c.placements ? ` · ${[c.placements.search ? 'поиск' : '', c.placements.recommendations ? 'рекомендации' : ''].filter(Boolean).join(' и ')}` : ''}
+                · запущена ${c.startedAt ? esc(String(c.startedAt).slice(0, 10)) : '—'} · <a href="#/product/${it.nmId}">товар ${it.nmId}</a></p>
+            </div>
+            <div class="ad-kpis">
+              <div><span class="muted small">Бюджет кампании</span><b>${rub(c.budgetTotal)}</b></div>
+              <div><span class="muted small">Дневной лимит</span><b>${c.dailyLimit ? rub(c.dailyLimit) : 'нет'}</b></div>
+              <div><span class="muted small">Остаток на WB</span><b>${n(it.product.stocks)}${it.product.stockDays != null ? ` · ~${it.product.stockDays} дн.` : ''}</b></div>
+            </div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="label">Показы · CTR</div><div class="value">${n(f.views)}</div><div class="delta muted">CTR ${pct(f.ctr, 2)}</div></div>
+            <div class="kpi"><div class="label">Клики · цена клика</div><div class="value">${n(f.clicks)}</div><div class="delta muted">${f.cpc != null ? `${n(f.cpc, 2)} ₽ за клик` : '—'}</div></div>
+            <div class="kpi"><div class="label">Заказы с рекламы</div><div class="value">${n(f.orders)}</div><div class="delta muted">конверсия ${pct(f.cr, 2)} · корзина ${pct(f.cartRate)}</div></div>
+            <div class="kpi"><div class="label">Расход</div><div class="value">${rub(f.spend)}</div><div class="delta muted">заказ ${rub(f.costPerOrder)}</div></div>
+            <div class="kpi"><div class="label">ДРР</div><div class="value">${pct(f.drrPct)}</div><div class="delta muted">в кабинете WB ${pct(f.drrWbPct)} (от цены покупателя)</div></div>
+          </div>
+          <p class="small muted">Факт с ${esc(f.from)} по ${esc(f.to)} (${n(f.days)} дн. с данными). WB отдаёт статистику с задержкой до нескольких часов.</p>
+          <div class="grid two">
+            <div><h3>Что сделать</h3><ul class="alerts">${it.recommendations.map((r) => `<li class="${levelCls[r.level] || 'info'}">${esc(r.text)}</li>`).join('') || '<li class="info">Пока нечего советовать.</li>'}</ul>
+              <h3>Прогноз и факт</h3>${compareTable(it)}
+              ${it.forecastHistory.length ? `<details><summary class="small">Прежние прогнозы (${it.forecastHistory.length})</summary><ul class="plain small">${it.forecastHistory.map((h) => `<li>${esc(String(h.createdAt).slice(0, 10))}: ${esc(h.reason)} → ДРР ${pct(h.drrPct)}${h.perDay ? `, ${n(h.perDay.orders, 2)} заказа/день` : ''}</li>`).join('')}</ul></details>` : ''}
+            </div>
+            <div><h3>Экономика клика сейчас</h3>${clickTable(it)}
+              ${perDayLine(it.economics.perDay, 'Ожидание в день при нынешних настройках')}
+              <p class="small muted">Клики в день: ${esc(it.inputs.clicksSource || '—')}. Бюджет в день: ${it.inputs.dailyBudget ? `${rub(it.inputs.dailyBudget)} — ${esc(it.inputs.budgetSource)}` : 'неизвестен'}.</p>
+            </div>
+          </div>
+          <details class="ad-more"><summary>Из чего прибыль с заказа (юнит-экономика)</summary>${econTable(it)}</details>
+          <details class="ad-more" open><summary>Калькулятор: что будет, если поменять ставку или бюджет</summary>
+            <div class="form-row calc">
+              <label>Ставка, ${bidUnit(c)}<br/><input type="number" step="0.1" min="0" data-f="bid" value="${it.inputs.bid ?? ''}"/></label>
+              <label>Бюджет в день, ₽<br/><input type="number" step="10" min="0" data-f="dailyBudget" value="${it.inputs.dailyBudget ?? ''}"/></label>
+              <label>Конверсия клика в заказ, %<br/><input type="number" step="0.1" min="0" data-f="crPct" value="${it.economics.cr ?? ''}"/></label>
+              ${c.paymentType === 'cpm' ? `<label>CTR, %<br/><input type="number" step="0.1" min="0" data-f="ctrPct" value="${n(it.inputs.ctr * 100, 2).replace(',', '.')}"/></label>` : ''}
+              <button class="btn" type="button" data-calc="${idx}">Пересчитать</button>
+            </div>
+            <div class="calc-out" id="calcOut${idx}">${perDayLine(it.economics.perDay, 'Сейчас')}${scenarioTable(it.scenarios, c)}</div>
+          </details>
+        </section>`;
+      }).join('')}`;
+
+    $app.querySelectorAll('[data-calc]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const idx = Number(btn.dataset.calc);
+        const it = items[idx];
+        const card = $app.querySelector(`.ad-card[data-idx="${idx}"]`);
+        const body = { advertId: it.campaign.advertId, nmId: it.nmId };
+        card.querySelectorAll('[data-f]').forEach((inp) => {
+          const v = String(inp.value).trim().replace(',', '.');
+          if (v !== '') body[inp.dataset.f] = Number(v);
+        });
+        // Не меняли ставку — не масштабируем клики
+        if (body.bid === it.inputs.bid) delete body.bid;
+        if (body.dailyBudget === it.inputs.dailyBudget) delete body.dailyBudget;
+        if (body.crPct === it.economics.cr) delete body.crPct;
+        try {
+          const r = await api('ads/calc', { method: 'POST', body });
+          const e = r.economics;
+          document.getElementById(`calcOut${idx}`).innerHTML = `
+            <p><b>При ставке ${n(r.inputs.bid, 1)} ${bidUnit(it.campaign)}:</b> цена клика ${n(e.cpc, 2)} ₽, заказ с рекламы ${rub(e.costPerOrder)}, ДРР <b>${pct(e.drrPct)}</b>, прибыль с заказа после рекламы ${rub(e.profitPerOrderAfterAds)} (маржа ${pct(e.marginAfterAdsPct)}).</p>
+            ${perDayLine(e.perDay, 'В день')}
+            <p class="small muted">Клики в день: ${esc(r.inputs.clicksSource || '—')}.</p>
+            ${scenarioTable(r.scenarios, it.campaign)}`;
+        } catch (err) {
+          toast(err.message);
+        }
+      }),
+    );
+    if (focus) $app.querySelector('.ad-card')?.scrollIntoView({ block: 'start' });
+  }
+
   async function viewJournal() {
     setActiveTab('journal');
     const [j, ov] = await Promise.all([api('journal'), state.overview ? Promise.resolve(state.overview) : api('overview')]);

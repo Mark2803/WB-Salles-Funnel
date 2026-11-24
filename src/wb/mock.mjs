@@ -48,24 +48,34 @@ export function createMockClient({ nmIds, today = todayMsk() }) {
             {
               id: 900001,
               status: 9,
-              timestamps: { updated: `${today}T08:00:00Z` },
-              settings: { paymentType: 'cpc', name: 'Шу Пуэр 8 г — клики', placements: { search: true, recommendations: false } },
-              nms: [{ nmId: tracked[2] ?? tracked[0], bids: { search: 8 } }],
+              timestamps: { created: `${addDays(today, -20)}T08:00:00Z`, started: `${addDays(today, -20)}T09:00:00Z`, updated: `${today}T08:00:00Z` },
+              settings: { paymentType: 'cpc', name: 'Габа 8 г — клики', placements: { search: true, recommendations: false } },
+              // Ставки WB отдаёт в копейках: 900 = 9 ₽ за клик
+              nms: [{ nmId: tracked[2] ?? tracked[0], subject: { id: 406, name: 'Чай' }, bids: { search: 900 } }],
             },
           ],
           next: '',
         };
+      }
+      if (path === '/api/advert/v0/daily-limits') {
+        return { adverts: [{ advertId: 900001, enabled: true, dailyLimit: 300, spentToday: 120, currency: 'RUB' }] };
+      }
+      if (path === '/api/advert/v0/bids/recommendations') {
+        return [{ advertId: 900001, nmId: Number(query.nmId), paymentType: 'cpc', base: { competitiveBid: { bidKopecks: 1200 }, leadersBid: { bidKopecks: 2500 }, top2: { bidKopecks: 4000 } } }];
+      }
+      if (path === '/api/v1/tariffs/commission') {
+        return { report: [{ subjectID: 406, subjectName: 'Чай', parentName: 'Продукты', paidStorageKgvp: 19.5, kgvpMarketplace: 21.5 }] };
       }
       if (path === '/adv/v3/fullstats') {
         const days = dateRange(query.beginDate, query.endDate).map((date) => {
           const r = rng(Number(date.replaceAll('-', '')) % 100000);
           const views = Math.round(400 + r() * 400);
           const clicks = Math.round(views * (0.025 + r() * 0.015));
-          const orders = Math.round(clicks * 0.08 + r());
+          const orders = Math.round(clicks * 0.06 + r() * 0.8);
           const nmId = tracked[2] ?? tracked[0];
           return {
             date: `${date}T00:00:00Z`,
-            apps: [{ appType: 32, nms: [{ nmId, name: info(nmId).title, views, clicks, atbs: Math.round(clicks * 0.15), orders, shks: orders, sum: Math.round(clicks * 8), sum_price: orders * 800 }] }],
+            apps: [{ appType: 32, nms: [{ nmId, name: info(nmId).title, views, clicks, atbs: Math.round(clicks * 0.15), orders, shks: orders, sum: Math.round(clicks * 6.2), sum_price: orders * 1100 }] }],
           };
         });
         return [{ advertId: 900001, days }];
@@ -80,6 +90,9 @@ export function createMockClient({ nmIds, today = todayMsk() }) {
       throw new Error(`Тестовый режим: нет ответа для GET ${path}`);
     },
     async post(service, path, body = {}) {
+      if (path === '/api/advert/v2/budget') {
+        return { adverts: (body.advertIds || []).map((advertId) => ({ advertId, currency: 'RUB', total: 2500 })) };
+      }
       if (path === '/api/analytics/v3/sales-funnel/products/history') {
         return body.nmIds.map((nmId) => ({
           product: { nmId, title: info(nmId).title, vendorCode: info(nmId).vendor, brandName: '', subjectId: 406, subjectName: 'Чай' },

@@ -17,6 +17,7 @@ import { addDays, isDate, todayMsk } from './dates.mjs';
 import { baselineFor, overview, productSeries, productSummary } from './metrics.mjs';
 import { STRATEGIES, defaultParams, getStrategy, normalizeParams, planVsFact, simulate, strategyCatalog } from './strategies.mjs';
 import { buildClaudeSummary } from './summary.mjs';
+import { adsCalc, adsOverview } from './ads.mjs';
 import { isSyncRunning, lastRuns, runSync } from './sync.mjs';
 
 export class HttpError extends Error {
@@ -155,6 +156,35 @@ export function createApi({ db, cfg, log = console, verifyToken }) {
 
   // ---------- Стратегии и симулятор ----------
   route('GET', '/api/strategies', () => ({ strategies: strategyCatalog() }));
+
+  // ---------- Реклама: кампании WB, прогноз, факт, советы, калькулятор ----------
+  route('GET', '/api/ads', () => {
+    const settings = getSettings(db);
+    return { items: adsOverview(db, settings), targetDrrPct: settings.targetDrrPct };
+  });
+
+  route('POST', '/api/ads/calc', ({ body }) => {
+    const numOrNull = (v, min, max) => {
+      if (v === null || v === undefined || v === '') return null;
+      const x = Number(v);
+      if (!Number.isFinite(x) || x < min || x > max) throw new HttpError(400, 'BAD_VALUE', 'Проверьте числа: ставка, бюджет, конверсия');
+      return x;
+    };
+    const advertId = Number(body?.advertId);
+    const nmId = Number(body?.nmId);
+    if (!Number.isInteger(advertId) || !Number.isInteger(nmId)) throw new HttpError(400, 'BAD_VALUE', 'Не указана кампания');
+    const result = adsCalc(db, getSettings(db), {
+      advertId,
+      nmId,
+      bid: numOrNull(body.bid, 0.01, 100_000),
+      dailyBudget: numOrNull(body.dailyBudget, 1, 10_000_000),
+      crPct: numOrNull(body.crPct, 0.01, 100),
+      ctrPct: numOrNull(body.ctrPct, 0.01, 100),
+      clicksPerDay: numOrNull(body.clicksPerDay, 0, 1_000_000),
+    });
+    if (!result) throw new HttpError(404, 'NOT_FOUND', 'Кампания не найдена. Обновите данные.');
+    return result;
+  });
 
   route('POST', '/api/simulate', ({ body }) => {
     const p = nmIdParam(body.nmId, db);

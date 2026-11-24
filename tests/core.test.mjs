@@ -101,9 +101,15 @@ test('разбор сводки по товарам: остатки и рейт�
   assert.equal(r[0].deliveryHours, 30.5);
 });
 
-test('разбор рекламы: только наши артикулы, суммирование по платформам', () => {
-  const adverts = parseAdverts({ adverts: [{ id: 7, status: 9, settings: { name: 'к1', paymentType: 'cpc' }, nms: [{ nmId: 1 }, { nmId: 99 }] }, { id: 8, status: 9, settings: {}, nms: [{ nmId: 99 }] }] }, [1, 2]);
-  assert.deepEqual(adverts.map((a) => [a.advertId, a.nmIds]), [[7, [1]]]);
+test('разбор рекламы: все кампании, ставки из копеек в рубли, суммирование по платформам', () => {
+  const adverts = parseAdverts({ adverts: [
+    { id: 7, status: 9, settings: { name: 'к1', paymentType: 'cpc' }, nms: [{ nmId: 1, subject: { id: 406, name: 'Чай' }, bids: { search: 900 } }, { nmId: 99 }] },
+    { advertId: 8, status: 4, settings: {}, nms: [{ nmId: 99 }] },
+    { status: 9, nms: [{ nmId: 5 }] },
+  ] });
+  assert.deepEqual(adverts.map((a) => [a.advertId, a.status, a.nmIds]), [[7, 9, [1, 99]], [8, 4, [99]]]);
+  assert.equal(adverts[0].bids[1].search, 9);
+  assert.deepEqual(adverts[0].subjects, [{ nmId: 1, id: 406, name: 'Чай' }]);
   const rows = parseFullstats(
     [
       {

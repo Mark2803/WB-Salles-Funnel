@@ -2,6 +2,7 @@
 import { addDays, todayMsk } from './dates.mjs';
 import { overview } from './metrics.mjs';
 import { getStrategy, planVsFact } from './strategies.mjs';
+import { adsOverview } from './ads.mjs';
 
 const fmt = (v, suffix = '') => (v == null ? '—' : `${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}${suffix}`);
 
@@ -25,7 +26,7 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   for (const p of items) {
     const u = p.unit;
     lines.push(
-      `- ${p.nmId}: себестоимость ${fmt(u.cost, ' ₽')}, прибыль с продажи до рекламы ${fmt(u.profitPerUnit, ' ₽')}, безубыточность ${fmt(u.breakEvenPrice, ' ₽')}, рабочая реклама на продажу ${fmt(u.workAdPerSale, ' ₽')}, комиссия ${fmt(u.commissionPct, '%')}, логистика на продажу ${fmt(u.logisticsPerSold, ' ₽')} (источник: ${u.source === 'finance' ? 'финотчёт WB' : 'настройки'})`,
+      `- ${p.nmId}: себестоимость ${fmt(u.cost, ' ₽')}, прибыль с продажи до рекламы ${fmt(u.profitPerUnit, ' ₽')}, безубыточность ${fmt(u.breakEvenPrice, ' ₽')}, рабочая реклама на продажу ${fmt(u.workAdPerSale, ' ₽')}, комиссия ${fmt(u.commissionPct, '%')}, логистика на продажу ${fmt(u.logisticsPerSold, ' ₽')} (комиссия: ${u.commissionSource}; логистика: ${u.logisticsSource})`,
     );
   }
   lines.push('');
@@ -38,6 +39,17 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
     }
   }
   if (!any) lines.push('- нет');
+  lines.push('');
+  lines.push('## Рекламные кампании');
+  const ads = adsOverview(db, settings, today);
+  if (!ads.length) lines.push('- нет');
+  for (const a of ads) {
+    const c = a.campaign;
+    const e = a.economics;
+    const f = a.fact;
+    lines.push(`- ${a.nmId} «${c.name}» (${c.paymentLabel}, ${c.statusLabel}): ставка ${fmt(a.inputs.bid)} ₽, цена клика ${fmt(e.cpc)} ₽, бюджет в день ${fmt(a.inputs.dailyBudget, ' ₽')}. Факт с ${f.from}: показы ${fmt(f.views)}, клики ${fmt(f.clicks)}, CTR ${fmt(f.ctr, '%')}, заказы ${fmt(f.orders)}, расход ${fmt(f.spend, ' ₽')}, ДРР ${fmt(f.drrPct, '%')}. Расчёт: конверсия ${fmt(e.cr, '%')} (${a.inputs.crSource}), ДРР ${fmt(e.drrPct, '%')}, прибыль с заказа после рекламы ${fmt(e.profitPerOrderAfterAds, ' ₽')}, безубыточная ставка ${fmt(e.breakEvenBid)}, ставка под цель ${fmt(e.targetBid)}.`);
+    for (const r of a.recommendations) lines.push(`  - ${r.text}`);
+  }
   lines.push('');
   const plans = db.prepare("SELECT * FROM plans WHERE status = 'active' ORDER BY id").all();
   lines.push('## Активные стратегии');

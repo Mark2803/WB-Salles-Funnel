@@ -20,7 +20,7 @@ export function parseFunnelHistory(resp) {
   for (const item of Array.isArray(resp) ? resp : []) {
     const p = item.product || {};
     if (!p.nmId) continue;
-    products.push({ nmId: p.nmId, title: p.title, vendorCode: p.vendorCode });
+    products.push({ nmId: p.nmId, title: p.title, vendorCode: p.vendorCode, subjectId: p.subjectId ?? null, subjectName: p.subjectName ?? null });
     for (const h of item.history || []) {
       if (!h.date) continue;
       rows.push({
@@ -61,8 +61,9 @@ export async function collectFunnel(client, db, nmIds, today = todayMsk()) {
         up.run(r.nmId, r.date, r.open, r.cart, r.orders, r.orderSum, r.buyouts, r.buyoutSum, r.buyoutPercent, r.wishlist, nowIso());
         saved++;
       }
-      const prod = db.prepare('UPDATE products SET title = COALESCE(?, title), vendor_code = COALESCE(?, vendor_code), updated_at = ? WHERE nm_id = ?');
-      for (const p of products) prod.run(p.title || null, p.vendorCode || null, nowIso(), p.nmId);
+      const prod = db.prepare(`UPDATE products SET title = COALESCE(?, title), vendor_code = COALESCE(?, vendor_code),
+        subject_id = COALESCE(?, subject_id), subject_name = COALESCE(?, subject_name), updated_at = ? WHERE nm_id = ?`);
+      for (const p of products) prod.run(p.title || null, p.vendorCode || null, p.subjectId || null, p.subjectName || null, nowIso(), p.nmId);
     });
   }
   return { rows: saved };
@@ -155,18 +156,30 @@ export async function collectPrices(client, db, nmIds, today = todayMsk()) {
 }
 
 // ---------- Реклама ----------
-export function parseAdverts(resp, tracked) {
-  const set = new Set(tracked);
+// Статусы кампаний WB: 4 — готова к запуску, 7 — завершена, 9 — активна, 11 — на паузе.
+export const CAMPAIGN_STATUS = { 4: 'готова к запуску', 7: 'завершена', 8: 'отменена', 9: 'активна', 11: 'на паузе' };
+export const LIVE_STATUSES = [4, 9, 11];
+const rubFromKopecks = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v) / 100);
+
+/** Кампании со всеми товарами, ставками (в рублях) и местами показа. */
+export function parseAdverts(resp) {
+  // WB иногда отдаёт номер кампании как id, иногда как advertId; SQLite не принимает undefined — всё приводим к null
   return (resp?.adverts || [])
+    .filter((a) => Number.isFinite(Number(a?.id ?? a?.advertId)))
     .map((a) => ({
-      advertId: a.id,
-      name: a.settings?.name || '',
-      status: a.status,
-      paymentType: a.settings?.paymentType || '',
-      nmIds: (a.nms || []).map((n) => n.nmId).filter((id) => set.has(id)),
+      advertId: Number(a.id ?? a.advertId),
+      name: a.settings?.name || a.name || '',
+      status: a.status ?? null,
+      paymentType: a.settings?.paymentType || a.paymentType || '',
+      placements: a.settings?.placements || null,
+      nmIds: (a.nms || []).map((n) => Number(n.nmId)).filter((id) => Number.isFinite(id) && id > 0),
+      subjects: (a.nms || []).filter((n) => n.subject?.id).map((n) => ({ nmId: n.nmId, id: n.subject.id, name: n.subject.name || null })),
+      // Ставки WB отдаёт в копейках: за клик (cpc) или за 1000 показов (cpm)
+      bids: Object.fromEntries((a.nms || []).map((n) => [n.nmId, { search: rubFromKopecks(n.bids?.search), recommendations: rubFromKopecks(n.bids?.recommendations) }])),
+      created: a.timestamps?.created || null,
+      started: a.timestamps?.started || null,
       updated: a.timestamps?.updated || a.timestamps?.started || null,
-    }))
-    .filter((a) => a.nmIds.length > 0);
+    }));
 }
 
 export function parseFullstats(resp, tracked) {
@@ -179,8 +192,9 @@ export function parseFullstats(resp, tracked) {
       for (const app of day.apps || []) {
         for (const n of app.nms || []) {
           if (!set.has(n.nmId)) continue;
-          const key = `${n.nmId}|${date}|${camp.advertId}`;
-          const cur = acc.get(key) || { nmId: n.nmId, date, advertId: camp.advertId, views: 0, clicks: 0, atbs: 0, orders: 0, shks: 0, spend: 0, orderSum: 0 };
+          const advertId = Number(camp.advertId ?? camp.id);
+          const key = `${n.nmId}|${date}|${advertId}`;
+          const cur = acc.get(key) || { nmId: n.nmId, date, advertId, views: 0, clicks: 0, atbs: 0, orders: 0, shks: 0, spend: 0, orderSum: 0 };
           cur.views += num(n.views);
           cur.clicks += num(n.clicks);
           cur.atbs += num(n.atbs);
@@ -196,37 +210,149 @@ export function parseFullstats(resp, tracked) {
   return [...acc.values()];
 }
 
+/** Рекомендуемые ставки WB (в рублях): конкурентная, лидеров, топ-2. */
+export function parseBidRecommendations(resp) {
+  const out = {};
+  for (const r of Array.isArray(resp) ? resp : []) {
+    if (!r?.nmId || !r.base) continue;
+    out[r.nmId] = {
+      competitive: rubFromKopecks(r.base.competitiveBid?.bidKopecks),
+      leaders: rubFromKopecks(r.base.leadersBid?.bidKopecks),
+      top2: rubFromKopecks(r.base.top2?.bidKopecks),
+    };
+  }
+  return out;
+}
+
+/**
+ * Реклама: все кампании продавца (включая «готова к запуску»), ставки, бюджет, дневной лимит,
+ * рекомендации WB по ставкам и статистика по дням. Товары с действующей рекламой отслеживаются автоматически
+ * (возвращаются в extraNmIds).
+ */
 export async function collectAds(client, db, nmIds, today = todayMsk()) {
   const adverts = [];
   let next = '';
   for (let page = 0; page < 40; page++) {
-    const resp = await client.get('advert', '/api/advert/v3/adverts', { statuses: '7,9,11', limit: 50, next });
-    adverts.push(...parseAdverts(resp, nmIds));
+    const resp = await client.get('advertInfo', '/api/advert/v3/adverts', { statuses: '4,7,9,11', limit: 50, next });
+    const parsed = parseAdverts(resp);
+    // WB поменял формат ответа — сообщаем, какие поля пришли, чтобы быстро поправить разбор
+    if ((resp?.adverts || []).length && !parsed.length) {
+      throw new Error(`не удалось разобрать список кампаний WB, поля: ${Object.keys(resp.adverts[0]).join(', ')}`);
+    }
+    adverts.push(...parsed);
     next = resp?.next || '';
     if (!next) break;
   }
   const since = addDays(today, -40);
-  const relevant = adverts.filter((a) => a.status !== 7 || !a.updated || String(a.updated).slice(0, 10) >= since);
-  transaction(db, () => {
-    const up = db.prepare(`INSERT INTO campaigns(advert_id, name, status, payment_type, nm_ids, updated_at) VALUES (?,?,?,?,?,?)
-      ON CONFLICT(advert_id) DO UPDATE SET name=excluded.name, status=excluded.status, payment_type=excluded.payment_type, nm_ids=excluded.nm_ids, updated_at=excluded.updated_at`);
-    for (const a of adverts) up.run(a.advertId, a.name, a.status, a.paymentType, JSON.stringify(a.nmIds), nowIso());
-  });
-  let saved = 0;
-  for (const ids of chunk(relevant.map((a) => a.advertId), 50)) {
-    const resp = await client.get('advert', '/adv/v3/fullstats', { ids: ids.join(','), beginDate: addDays(today, -6), endDate: today });
-    const rows = parseFullstats(resp, nmIds);
-    transaction(db, () => {
-      const up = db.prepare(`INSERT INTO ads_daily(nm_id, date, advert_id, views, clicks, atbs, orders, shks, spend, order_sum) VALUES (?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(nm_id, date, advert_id) DO UPDATE SET views=excluded.views, clicks=excluded.clicks, atbs=excluded.atbs, orders=excluded.orders,
-          shks=excluded.shks, spend=excluded.spend, order_sum=excluded.order_sum`);
-      for (const r of rows) {
-        up.run(r.nmId, r.date, r.advertId, r.views, r.clicks, r.atbs, r.orders, r.shks, r.spend, r.orderSum);
-        saved++;
-      }
-    });
+  const live = adverts.filter((a) => LIVE_STATUSES.includes(a.status));
+  const recentFinished = adverts.filter((a) => a.status === 7 && (!a.updated || String(a.updated).slice(0, 10) >= since));
+  const tracked = new Set(nmIds);
+  const extraNmIds = [...new Set(live.flatMap((a) => a.nmIds))].filter((id) => !tracked.has(id));
+  const statsNmIds = [...nmIds, ...extraNmIds];
+  const warnings = [];
+
+  // Бюджет кампании и дневной лимит — для прогноза кликов
+  const budgets = {};
+  const limits = {};
+  if (live.length) {
+    try {
+      const b = await client.post('advertInfo', '/api/advert/v2/budget', { advertIds: live.map((a) => a.advertId) });
+      for (const x of b?.adverts || []) budgets[x.advertId] = num(x.total);
+    } catch (err) {
+      warnings.push(`бюджет: ${err.message}`);
+    }
+    try {
+      const l = await client.get('advertInfo', '/api/advert/v0/daily-limits', { advertIds: live.map((a) => a.advertId).join(',') });
+      for (const x of l?.adverts || []) limits[x.advertId] = { limit: x.enabled ? num(x.dailyLimit) : null, spentToday: x.spentToday == null ? null : num(x.spentToday) };
+    } catch (err) {
+      warnings.push(`дневной лимит: ${err.message}`);
+    }
   }
-  return { campaigns: relevant.length, rows: saved };
+  // Рекомендуемые ставки WB — для кампаний за клики и за показы, по каждому товару
+  const recommended = {};
+  for (const a of live.filter((x) => ['cpc', 'cpm'].includes(x.paymentType))) {
+    for (const nmId of a.nmIds.slice(0, 5)) {
+      try {
+        const r = await client.get('advertRec', '/api/advert/v0/bids/recommendations', { nmId, advertId: a.advertId });
+        Object.assign((recommended[a.advertId] ||= {}), parseBidRecommendations(r));
+      } catch (err) {
+        warnings.push(`рекомендуемые ставки: ${err.message}`);
+        break;
+      }
+    }
+  }
+
+  transaction(db, () => {
+    const up = db.prepare(`INSERT INTO campaigns(advert_id, name, status, payment_type, nm_ids, updated_at, bids_json, placements_json, created_at, started_at, budget_total, daily_limit, spent_today, recommended_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(advert_id) DO UPDATE SET name=excluded.name, status=excluded.status, payment_type=excluded.payment_type, nm_ids=excluded.nm_ids,
+        updated_at=excluded.updated_at, bids_json=excluded.bids_json, placements_json=excluded.placements_json, created_at=excluded.created_at,
+        started_at=excluded.started_at, budget_total=COALESCE(excluded.budget_total, campaigns.budget_total),
+        daily_limit=excluded.daily_limit, spent_today=excluded.spent_today, recommended_json=COALESCE(excluded.recommended_json, campaigns.recommended_json)`);
+    for (const a of adverts) {
+      up.run(
+        a.advertId, a.name, a.status, a.paymentType, JSON.stringify(a.nmIds), nowIso(), JSON.stringify(a.bids), JSON.stringify(a.placements),
+        a.created ?? null, a.started ?? null, budgets[a.advertId] ?? null, limits[a.advertId]?.limit ?? null, limits[a.advertId]?.spentToday ?? null,
+        recommended[a.advertId] ? JSON.stringify(recommended[a.advertId]) : null,
+      );
+    }
+    const subj = db.prepare('UPDATE products SET subject_id = COALESCE(subject_id, ?), subject_name = COALESCE(subject_name, ?) WHERE nm_id = ?');
+    for (const a of adverts) for (const s of a.subjects) subj.run(s.id ?? null, s.name ?? null, Number(s.nmId));
+  });
+
+  // Статистика: для новых кампаний — с начала (до 30 дней назад), иначе последние 7 дней
+  let saved = 0;
+  const withStats = [...live.filter((a) => a.status !== 4), ...recentFinished];
+  const hasRows = db.prepare('SELECT 1 FROM ads_daily WHERE advert_id = ? LIMIT 1');
+  const groups = new Map();
+  for (const a of withStats) {
+    const fresh = !hasRows.get(a.advertId);
+    const startDay = a.started ? String(a.started).slice(0, 10) : null;
+    const begin = fresh ? (startDay && startDay > addDays(today, -29) ? startDay : addDays(today, -29)) : addDays(today, -6);
+    if (!groups.has(begin)) groups.set(begin, []);
+    groups.get(begin).push(a.advertId);
+  }
+  for (const [begin, ids] of groups) {
+    for (const part of chunk(ids, 50)) {
+      const resp = await client.get('advert', '/adv/v3/fullstats', { ids: part.join(','), beginDate: begin > today ? today : begin, endDate: today });
+      const rows = parseFullstats(resp, statsNmIds);
+      transaction(db, () => {
+        const up = db.prepare(`INSERT INTO ads_daily(nm_id, date, advert_id, views, clicks, atbs, orders, shks, spend, order_sum) VALUES (?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(nm_id, date, advert_id) DO UPDATE SET views=excluded.views, clicks=excluded.clicks, atbs=excluded.atbs, orders=excluded.orders,
+            shks=excluded.shks, spend=excluded.spend, order_sum=excluded.order_sum`);
+        for (const r of rows) {
+          up.run(r.nmId, r.date, r.advertId, r.views, r.clicks, r.atbs, r.orders, r.shks, r.spend, r.orderSum);
+          saved++;
+        }
+      });
+    }
+  }
+  return { campaigns: live.length, finished: recentFinished.length, rows: saved, extraNmIds, ...(warnings.length ? { warnings } : {}) };
+}
+
+// ---------- Комиссии WB по предметам (тарифы) ----------
+export function parseCommission(resp) {
+  return (resp?.report || [])
+    .filter((r) => r?.subjectID)
+    .map((r) => ({
+      subjectId: r.subjectID,
+      subjectName: r.subjectName || null,
+      parentName: r.parentName || null,
+      fbwPct: r.paidStorageKgvp == null ? null : num(r.paidStorageKgvp),
+      fbsPct: r.kgvpMarketplace == null ? null : num(r.kgvpMarketplace),
+    }));
+}
+
+/** Комиссия WB по предметам (официальные тарифы, раз в сутки). Нужна для юнит-экономики, пока нет финотчёта. */
+export async function collectTariffs(client, db) {
+  const list = parseCommission(await client.get('common', '/api/v1/tariffs/commission', { locale: 'ru' }));
+  transaction(db, () => {
+    const up = db.prepare(`INSERT INTO subject_tariffs(subject_id, subject_name, parent_name, fbw_pct, fbs_pct, updated_at) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(subject_id) DO UPDATE SET subject_name=excluded.subject_name, parent_name=excluded.parent_name, fbw_pct=excluded.fbw_pct, fbs_pct=excluded.fbs_pct, updated_at=excluded.updated_at`);
+    for (const t of list) up.run(t.subjectId, t.subjectName, t.parentName, t.fbwPct, t.fbsPct, nowIso());
+  });
+  const used = db.prepare('SELECT DISTINCT p.subject_name, t.fbw_pct FROM products p JOIN subject_tariffs t ON t.subject_id = p.subject_id WHERE p.active = 1').all();
+  return { subjects: list.length, used: used.map((u) => `${u.subject_name}: ${u.fbw_pct}%`) };
 }
 
 // ---------- Поисковые запросы и позиции (только с подпиской «Джем») ----------

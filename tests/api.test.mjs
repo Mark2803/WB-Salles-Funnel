@@ -92,6 +92,20 @@ test('API: вход, сбор, сводка, симулятор, планы, ж�
     assert.ok(page.headers.get('content-security-policy'));
     const outside = await fetch(base + '/..%2F.env');
     assert.equal(outside.status, 404);
+    // Реклама: кампания из тестового WB, прогноз, факт, советы и калькулятор
+    const ads = await call('GET', '/api/ads');
+    assert.equal(ads.status, 200);
+    const item = ads.json.items[0];
+    assert.equal(item.campaign.paymentType, 'cpc');
+    assert.equal(item.inputs.bid, 9);
+    assert.ok(item.forecast && item.comparison && item.recommendations.length > 0);
+    assert.equal(item.unit.commissionSource, 'финотчёт WB за 30 дней');
+    const calc = await call('POST', '/api/ads/calc', { advertId: item.campaign.advertId, nmId: item.nmId, bid: 12 });
+    assert.equal(calc.status, 200);
+    assert.ok(calc.json.economics.drrPct > item.economics.drrPct);
+    assert.equal((await call('POST', '/api/ads/calc', { advertId: 1, nmId: item.nmId })).status, 404);
+    const ovAds = await call('GET', '/api/overview');
+    assert.ok(ovAds.json.products.some((p) => p.campaigns.length === 1));
   } finally {
     server.close();
     db.close();

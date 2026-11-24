@@ -6,9 +6,13 @@ const div = (a, b) => (b ? a / b : null);
 
 // ---------- Юнит-экономика ----------
 // Та же формула, что в калькуляторе: прибыль = цена × (1 − комиссия − эквайринг − налог) − расходы на штуку
-export function unitEconomics({ price, cost, settings, actual = null }) {
+// Комиссия: факт из финотчёта → официальный тариф WB по предмету (FBW) → значение из настроек.
+export function unitEconomics({ price, cost, settings, actual = null, tariff = null }) {
   const buyout = (actual?.buyoutPct ?? settings.defaultBuyoutPct) / 100 || 0.95;
-  const commissionPct = actual?.commissionPct ?? settings.commissionPct;
+  const commissionPct = actual?.commissionPct ?? tariff?.pct ?? settings.commissionPct;
+  const commissionSource = actual?.commissionPct != null
+    ? 'финотчёт WB за 30 дней'
+    : tariff?.pct != null ? `тариф WB, предмет «${tariff.subjectName || '—'}» (FBW)` : 'настройки';
   const pctShare = (commissionPct + settings.acquiringPct + settings.taxPct) / 100;
   // Логистика на выкупленную штуку: из финотчёта (уже включает невыкупы) или по формуле
   const logisticsPerSold = actual?.logisticsPerSold ?? settings.logisticsPerDelivery / buyout + settings.returnLogistics * (1 / buyout - 1);
@@ -20,6 +24,11 @@ export function unitEconomics({ price, cost, settings, actual = null }) {
     price,
     cost: hasCost ? cost : null,
     commissionPct: round(commissionPct, 1),
+    commissionSource,
+    acquiringPct: settings.acquiringPct,
+    taxPct: settings.taxPct,
+    buyoutPct: round(buyout * 100, 0),
+    logisticsSource: actual?.logisticsPerSold != null ? 'финотчёт WB за 30 дней' : 'настройки',
     logisticsPerSold: round(logisticsPerSold, 0),
     storagePerSold: round(storage, 0),
     pctShare,
@@ -31,6 +40,14 @@ export function unitEconomics({ price, cost, settings, actual = null }) {
     workAdPerSale: hasCost && profit != null ? round(Math.max(0, profit - settings.targetProfitPerUnit), 0) : null,
     source: actual ? 'finance' : 'settings',
   };
+}
+
+// Официальная комиссия WB по предмету товара (FBW). Если предмет неизвестен, а у всех товаров он один — берём его.
+export function tariffFor(db, nmId) {
+  const own = db.prepare('SELECT t.fbw_pct pct, t.subject_name subjectName FROM products p JOIN subject_tariffs t ON t.subject_id = p.subject_id WHERE p.nm_id = ?').get(nmId);
+  if (own?.pct != null) return own;
+  const all = db.prepare('SELECT DISTINCT t.fbw_pct pct, t.subject_name subjectName FROM products p JOIN subject_tariffs t ON t.subject_id = p.subject_id WHERE p.subject_id IS NOT NULL').all();
+  return all.length === 1 && all[0].pct != null ? all[0] : null;
 }
 
 // Фактические комиссия и логистика за 30 дней из финотчёта WB
@@ -166,7 +183,7 @@ export function productSummary(db, p, settings, today = todayMsk()) {
   const actual = actualCosts(db, p.nm_id, today);
   const price = snap.seller_price ?? null;
   const cost = p.cost_per_unit ?? (settings.defaultCostPerUnit || null);
-  const unit = unitEconomics({ price, cost, settings, actual: actual ? { ...actual, buyoutPct: cur.buyoutPct ?? undefined } : null });
+  const unit = unitEconomics({ price, cost, settings, actual: actual ? { ...actual, buyoutPct: cur.buyoutPct ?? undefined } : null, tariff: tariffFor(db, p.nm_id) });
   const ordersPerDay = last14.orders / 14;
   const stockDays = snap.stocks_wb != null && ordersPerDay > 0 ? snap.stocks_wb / ordersPerDay : null;
   const profit = unit.profitPerUnit != null ? round(cur.buyouts * unit.profitPerUnit - (cur.ads.spend || 0), 0) : null;
@@ -176,6 +193,14 @@ export function productSummary(db, p, settings, today = todayMsk()) {
     .all(p.nm_id, addDays(today, -13), today);
   const byDate = Object.fromEntries(spark.map((r) => [r.date, r.order_count]));
   const plan = db.prepare("SELECT id, strategy_key, title, start_date FROM plans WHERE nm_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(p.nm_id);
+  // Действующая реклама на товаре (для отметки в сводке)
+  const ads = db
+    .prepare("SELECT advert_id, name, status, payment_type, bids_json FROM campaigns WHERE status IN (4, 9, 11) AND EXISTS (SELECT 1 FROM json_each(campaigns.nm_ids) WHERE value = ?)")
+    .all(p.nm_id)
+    .map((c) => {
+      const bids = (() => { try { return JSON.parse(c.bids_json || '{}')[p.nm_id] || {}; } catch { return {}; } })();
+      return { advertId: c.advert_id, name: c.name, status: c.status, paymentType: c.payment_type, bid: bids.search ?? bids.recommendations ?? null };
+    });
   return {
     nmId: p.nm_id,
     title: p.title,
@@ -199,6 +224,7 @@ export function productSummary(db, p, settings, today = todayMsk()) {
     status: statusOf(alerts),
     sparkOrders: dateRange(addDays(today, -13), today).map((d) => byDate[d] ?? 0),
     activePlan: plan || null,
+    campaigns: ads,
   };
 }
 
@@ -248,6 +274,7 @@ export function baselineFor(db, nmId, settings, today = todayMsk()) {
   const snap = latestSnapshot(db, nmId);
   const product = db.prepare('SELECT cost_per_unit FROM products WHERE nm_id = ?').get(nmId);
   const actual = actualCosts(db, nmId, today);
+  const tariff = tariffFor(db, nmId);
   const enough = m.open >= 50 && m.cart >= 5;
   const opensPerDay = m.open / 14;
   const adClicksPerDay = m.ads.clicks / 14;
@@ -264,6 +291,7 @@ export function baselineFor(db, nmId, settings, today = todayMsk()) {
     price: snap.seller_price ?? null,
     cost: product?.cost_per_unit ?? (settings.defaultCostPerUnit || null),
     actual,
+    tariff,
     ordersPerDay: round(m.orders / 14, 2),
   };
 }

@@ -3,7 +3,10 @@
 
 export const WB_HOSTS = {
   analytics: 'https://seller-analytics-api.wildberries.ru',
-  advert: 'https://advert-api.wildberries.ru',
+  advert: 'https://advert-api.wildberries.ru', // статистика кампаний — 3 запроса в минуту
+  advertInfo: 'https://advert-api.wildberries.ru', // список кампаний, бюджеты, дневные лимиты — 5 запросов в секунду
+  advertRec: 'https://advert-api.wildberries.ru', // рекомендуемые ставки — 5 запросов в минуту
+  common: 'https://common-api.wildberries.ru', // тарифы и комиссии WB — 1 запрос в минуту
   prices: 'https://discounts-prices-api.wildberries.ru',
   feedbacks: 'https://feedbacks-api.wildberries.ru',
   finance: 'https://finance-api.wildberries.ru',
@@ -13,6 +16,9 @@ export const WB_HOSTS = {
 const MIN_INTERVAL_MS = {
   analytics: 21_000, // 3 запроса в минуту
   advert: 21_000, // 3 запроса в минуту
+  advertInfo: 400,
+  advertRec: 13_000,
+  common: 61_000,
   prices: 700, // 10 запросов за 6 секунд
   feedbacks: 400, // 3 запроса в секунду
   finance: 61_000, // 1 запрос в минуту

@@ -201,7 +201,7 @@ export function simulate({ baseline, settings, strategyKey, params, days = 30, s
   };
   const run = (withStrategy) => {
     const price = (baseline.price ?? 0) * (withStrategy ? eff.priceMult : 1);
-    const unit = unitEconomics({ price, cost: baseline.cost, settings, actual: baseline.actual ? { ...baseline.actual, buyoutPct: baseline.buyoutPct * 100 } : null });
+    const unit = unitEconomics({ price, cost: baseline.cost, settings, actual: baseline.actual ? { ...baseline.actual, buyoutPct: baseline.buyoutPct * 100 } : null, tariff: baseline.tariff });
     const daily = [];
     for (let d = 1; d <= days; d++) {
       const ramp = withStrategy ? Math.min(1, d / eff.rampDays) : 0;

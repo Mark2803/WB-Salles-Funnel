@@ -174,6 +174,38 @@ const MIGRATIONS = [
   `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  // 4 — реклама подробно: ставки, бюджеты, рекомендации WB; предметы и комиссии WB; снимки прогнозов по кампаниям
+  `
+  ALTER TABLE campaigns ADD COLUMN bids_json TEXT;
+  ALTER TABLE campaigns ADD COLUMN placements_json TEXT;
+  ALTER TABLE campaigns ADD COLUMN created_at TEXT;
+  ALTER TABLE campaigns ADD COLUMN started_at TEXT;
+  ALTER TABLE campaigns ADD COLUMN budget_total REAL;
+  ALTER TABLE campaigns ADD COLUMN daily_limit REAL;
+  ALTER TABLE campaigns ADD COLUMN spent_today REAL;
+  ALTER TABLE campaigns ADD COLUMN recommended_json TEXT;
+  ALTER TABLE products ADD COLUMN subject_id INTEGER;
+  ALTER TABLE products ADD COLUMN subject_name TEXT;
+  CREATE TABLE subject_tariffs (
+    subject_id INTEGER PRIMARY KEY,
+    subject_name TEXT,
+    parent_name TEXT,
+    fbw_pct REAL,
+    fbs_pct REAL,
+    updated_at TEXT
+  );
+  CREATE TABLE ad_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    advert_id INTEGER NOT NULL,
+    nm_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    reason TEXT,
+    inputs_json TEXT NOT NULL,
+    forecast_json TEXT NOT NULL
+  );
+  CREATE INDEX ad_forecasts_campaign ON ad_forecasts(advert_id, nm_id, id);
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {

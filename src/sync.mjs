@@ -1,7 +1,8 @@
 // Запуск сбора данных: «быстрый» (воронка, остатки, цены, реклама) каждые N часов
 // и «полный» (плюс отзывы, финотчёт, поисковые запросы) раз в сутки.
 import { config } from './config.mjs';
-import { nowIso, ensureProducts, getMeta, setMeta } from './db.mjs';
+import { nowIso, ensureProducts, getMeta, setMeta, getSettings } from './db.mjs';
+import { snapshotForecasts } from './ads.mjs';
 import { todayMsk } from './dates.mjs';
 import { createWbClient } from './wb/client.mjs';
 import { createMockClient } from './wb/mock.mjs';
@@ -25,13 +26,21 @@ const STEPS = {
   prices: { label: 'Цены', fn: collect.collectPrices },
   costs: { label: 'Себестоимость (таблица «Финансы V3»)', fn: (client, db, nmIds, today, ctx) => collectCosts(ctx.costsSource, db) },
   ads: { label: 'Реклама', fn: collect.collectAds },
+  tariffs: { label: 'Комиссии WB (тарифы)', fn: (client, db) => collect.collectTariffs(client, db) },
   feedbacks: { label: 'Отзывы', fn: collect.collectFeedbacks },
   finance: { label: 'Финансовый отчёт', fn: collect.collectFinance },
   search: { label: 'Поиск и позиции («Джем»)', fn: collect.collectSearch },
 };
 
-export const QUICK = ['funnel', 'summary', 'prices', 'costs', 'ads'];
-export const FULL = ['funnel', 'summary', 'prices', 'costs', 'ads', 'feedbacks', 'finance', 'search'];
+// Реклама — первой: товары с действующей рекламой добавляются в отслеживаемые и попадают в остальные шаги
+export const QUICK = ['ads', 'funnel', 'summary', 'prices', 'costs'];
+export const FULL = ['ads', 'funnel', 'summary', 'prices', 'costs', 'tariffs', 'feedbacks', 'finance', 'search'];
+
+/** Товары из действующих рекламных кампаний (готова к запуску, активна, на паузе). */
+export function campaignNmIds(db) {
+  const rows = db.prepare('SELECT nm_ids FROM campaigns WHERE status IN (4, 9, 11)').all();
+  return [...new Set(rows.flatMap((r) => { try { return JSON.parse(r.nm_ids || '[]'); } catch { return []; } }))];
+}
 
 export function isSyncRunning() {
   return Boolean(running);
@@ -69,7 +78,10 @@ const SOURCE_LABEL = { sheet: 'галочки «Воронка WB» в Мене�
 export async function runSync(db, { kind = 'quick', client = makeClient(), costsSource = makeCostsSource(), nmIds: givenNmIds, today = todayMsk(), log = console } = {}) {
   if (running) return { alreadyRunning: true, runId: running };
   const tracked = givenNmIds ? { nmIds: givenNmIds, source: 'env' } : await resolveTrackedNmIds(db, { costsSource, log });
-  const nmIds = tracked.nmIds;
+  // К отмеченным галочкой — товары с действующей рекламой (их нельзя не видеть)
+  const nmIds = [...tracked.nmIds];
+  for (const id of campaignNmIds(db)) if (!nmIds.includes(id)) nmIds.push(id);
+  const adOnly = nmIds.length - tracked.nmIds.length;
   ensureProducts(db, nmIds);
   const steps = kind === 'full' ? FULL : QUICK;
   const runId = Number(db.prepare('INSERT INTO sync_runs(started_at, status, kind) VALUES (?,?,?)').run(nowIso(), 'running', kind).lastInsertRowid);
@@ -79,7 +91,7 @@ export async function runSync(db, { kind = 'quick', client = makeClient(), costs
     label: 'Список товаров',
     ok: !tracked.error,
     ...(tracked.error ? { error: tracked.error } : {}),
-    result: { count: nmIds.length, source: SOURCE_LABEL[tracked.source] },
+    result: { count: nmIds.length, source: SOURCE_LABEL[tracked.source], ...(adOnly ? { withAds: adOnly } : {}) },
     ms: 0,
   }];
   try {
@@ -88,12 +100,24 @@ export async function runSync(db, { kind = 'quick', client = makeClient(), costs
       const startedAt = Date.now();
       try {
         const result = await step.fn(client, db, nmIds, today, { costsSource });
+        // Реклама нашла новые товары — сразу собираем по ним и остальное
+        if (result?.extraNmIds?.length) {
+          for (const id of result.extraNmIds) if (!nmIds.includes(id)) nmIds.push(id);
+          ensureProducts(db, nmIds);
+        }
         details.push({ step: key, label: step.label, ok: true, result, ms: Date.now() - startedAt });
       } catch (err) {
         log.warn?.(`[sync] ${step.label}: ${err.message}`);
         details.push({ step: key, label: step.label, ok: false, error: err.message, status: err.status ?? null, ms: Date.now() - startedAt });
       }
       db.prepare('UPDATE sync_runs SET details_json = ? WHERE id = ?').run(JSON.stringify(details), runId);
+    }
+    // Прогноз по рекламе: при первом появлении кампании и при смене ставки/бюджета — снимок «что ожидаем»
+    try {
+      const made = snapshotForecasts(db, getSettings(db), today);
+      if (made.length) details.push({ step: 'adForecasts', label: 'Прогноз по рекламе', ok: true, result: { created: made.length }, ms: 0 });
+    } catch (err) {
+      details.push({ step: 'adForecasts', label: 'Прогноз по рекламе', ok: false, error: err.message, ms: 0 });
     }
     const failed = details.filter((d) => !d.ok);
     const status = failed.length === 0 ? 'ok' : failed.length === details.length ? 'error' : 'partial';
