@@ -118,12 +118,20 @@ export function bidScenarios(inputs, { extraBids = [] } = {}) {
  * ДРР считаем двумя способами: drrPct — от вашей цены продажи (так же, как прогноз; на нём советы),
  * drrWbPct — от суммы заказов в ценах покупателя (так показывает кабинет WB, обычно ниже из-за скидки WB).
  */
-export function adFact(db, advertId, nmId, from, to, price = null) {
+export function adFact(db, advertId, nmId, from, to, price = null, { withOthers = false } = {}) {
+  // withOthers: кампания на одном товаре — добавляем корзины и заказы других ваших товаров после клика по рекламе
+  // (WB учитывает их в статистике кампании, так же в его отчёте «Созданные заказы»)
   const r = db
-    .prepare(`SELECT COUNT(DISTINCT date) days, COALESCE(SUM(views),0) views, COALESCE(SUM(clicks),0) clicks, COALESCE(SUM(atbs),0) atbs,
-        COALESCE(SUM(orders),0) orders, COALESCE(SUM(spend),0) spend, COALESCE(SUM(order_sum),0) orderSum, MIN(date) first, MAX(date) last
-      FROM ads_daily WHERE advert_id = ? AND nm_id = ? AND date BETWEEN ? AND ?`)
-    .get(advertId, nmId, from, to);
+    .prepare(`SELECT COUNT(DISTINCT CASE WHEN nm_id = ? THEN date END) days,
+        COALESCE(SUM(views),0) views, COALESCE(SUM(clicks),0) clicks, COALESCE(SUM(atbs),0) atbs,
+        COALESCE(SUM(orders),0) orders, COALESCE(SUM(spend),0) spend, COALESCE(SUM(order_sum),0) orderSum, MIN(date) first, MAX(date) last,
+        COALESCE(SUM(CASE WHEN nm_id <> ? THEN orders END),0) otherOrders, COALESCE(SUM(CASE WHEN nm_id <> ? THEN order_sum END),0) otherOrderSum
+      FROM ads_daily WHERE advert_id = ? AND (nm_id = ? OR ?) AND date BETWEEN ? AND ?`)
+    .get(nmId, nmId, nmId, advertId, nmId, withOthers ? 1 : 0, from, to);
+  const ownOrders = r.orders - r.otherOrders;
+  const ownSum = r.orderSum - r.otherOrderSum;
+  // Выручка заказов в ценах продавца: свои — по вашей цене, чужие — по сумме из WB
+  const sellerRevenue = price ? ownOrders * price + r.otherOrderSum : null;
   return {
     from,
     to,
@@ -134,6 +142,10 @@ export function adFact(db, advertId, nmId, from, to, price = null) {
     clicks: r.clicks,
     atbs: r.atbs,
     orders: r.orders,
+    ownOrders,
+    otherOrders: r.otherOrders,
+    otherOrderSum: round(r.otherOrderSum, 0),
+    ownOrderSum: round(ownSum, 0),
     spend: round(r.spend, 0),
     orderSum: round(r.orderSum, 0),
     ctr: round(div(r.clicks, r.views) * 100, 2),
@@ -141,7 +153,7 @@ export function adFact(db, advertId, nmId, from, to, price = null) {
     cartRate: round(div(r.atbs, r.clicks) * 100, 1),
     cr: round(div(r.orders, r.clicks) * 100, 2),
     costPerOrder: round(div(r.spend, r.orders), 0),
-    drrPct: r.spend > 0 && r.orders > 0 && price ? round((r.spend / (r.orders * price)) * 100, 1) : null,
+    drrPct: r.spend > 0 && r.orders > 0 && sellerRevenue ? round((r.spend / sellerRevenue) * 100, 1) : null,
     drrWbPct: r.spend > 0 && r.orderSum > 0 ? round((r.spend / r.orderSum) * 100, 1) : null,
     perDay: r.days
       ? { views: round(r.views / r.days, 0), clicks: round(r.clicks / r.days, 1), orders: round(r.orders / r.days, 2), spend: round(r.spend / r.days, 0) }
@@ -182,6 +194,7 @@ export function adRecommendations({ econ, fact, inputs, recommended, organicCr, 
   const bidFmt = (v) => (inputs.paymentType === 'cpm' ? money(v) : `${r1(v)} ₽`);
 
   if (inputs.profitPerUnit == null) add('critical', 'Нет себестоимости — прибыль и безубыточная ставка не считаются. Укажите её в Менеджменте → «Товары и остатки».');
+  if (inputs.status === 11) add('warning', 'По данным WB кампания на паузе: показов нет, пока её не возобновят. Если в кабинете она активна, статус обновится при следующем сборе. WB ставит на паузу сам, когда кончается бюджет или срабатывает дневной лимит.');
   if (inputs.status === 4) add('info', 'Кампания готова к запуску, но не запущена: показов нет. После запуска первый факт появится при ближайшем сборе.');
 
   const clicks = fact?.clicks ?? 0;
@@ -259,7 +272,8 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
   const summary = productSummary(db, product, settings, today);
   const from = startDay(campaign, today);
   const price = summary.snapshot.seller_price ?? null;
-  const fact = adFact(db, campaign.advertId, nmId, from, today, price);
+  const withOthers = (campaign.nmIds || []).length <= 1;
+  const fact = adFact(db, campaign.advertId, nmId, from, today, price, { withOthers });
   const organic = periodMetrics(db, nmId, addDays(today, -29), today);
   const organicCr = organic.open >= 100 ? organic.orders / organic.open : null;
 
@@ -267,7 +281,7 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
   let crSource;
   if (fact.clicks >= MIN_CLICKS_FOR_CR) {
     cr = fact.orders / fact.clicks;
-    crSource = `рекламы (факт: ${fact.orders} заказов из ${fact.clicks} кликов)`;
+    crSource = `рекламы (факт: ${fact.orders} заказов из ${fact.clicks} кликов${fact.otherOrders ? `, из них ${fact.otherOrders} — другие ваши товары` : ''})`;
   } else if (organicCr) {
     cr = organicCr;
     crSource = `карточки за 30 дней (${organic.orders} заказов из ${organic.open} переходов)`;
@@ -364,6 +378,7 @@ export function snapshotForecasts(db, settings, today = todayMsk()) {
       const bidUnit = c.paymentType === 'cpm' ? '₽ за 1000 показов' : '₽ за клик';
       let reason = null;
       if (!prev) reason = `Кампания «${c.name}» (${c.paymentType === 'cpm' ? 'оплата за показы' : 'оплата за клик'}): ставка ${inputs.bid ?? '—'} ${bidUnit}`;
+      else if (inputs.bid != null && prevInputs.bid == null) reason = `Кампания «${c.name}» (${c.paymentType === 'cpm' ? 'оплата за показы' : 'оплата за клик'}): ставка ${inputs.bid} ${bidUnit}`;
       else if (inputs.bid != null && prevInputs.bid !== inputs.bid) reason = `Ставка в «${c.name}»: ${prevInputs.bid ?? '—'} → ${inputs.bid} ${bidUnit}`;
       else if (inputs.dailyBudget && prevInputs.dailyBudget && Math.abs(inputs.dailyBudget - prevInputs.dailyBudget) / prevInputs.dailyBudget > 0.2 && inputs.budgetSource === 'дневной лимит кампании') {
         reason = `Дневной лимит в «${c.name}»: ${prevInputs.dailyBudget} → ${inputs.dailyBudget} ₽`;
@@ -391,7 +406,7 @@ export function adsOverview(db, settings, today = todayMsk()) {
         .all(c.advertId, nmId)
         .map((f) => ({ id: f.id, createdAt: f.created_at, startDate: f.start_date, reason: f.reason, inputs: parse(f.inputs_json, {}), forecast: parse(f.forecast_json, {}) }));
       const current = forecasts.at(-1) || null;
-      const factSinceForecast = current ? adFact(db, c.advertId, nmId, current.startDate, today, inputs.price) : null;
+      const factSinceForecast = current ? adFact(db, c.advertId, nmId, current.startDate, today, inputs.price, { withOthers: c.nmIds.length <= 1 }) : null;
       const recommended = c.recommended?.[nmId] || null;
       out.push({
         campaign: { ...c, nmIds: undefined },

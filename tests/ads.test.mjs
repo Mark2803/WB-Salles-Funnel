@@ -73,3 +73,24 @@ test('мало кликов — предупреждение, без вывод�
   assert.match(recs[0].text, /Пока 11 кликов/);
   assert.ok(!recs.some((r) => r.level === 'critical'));
 });
+
+test('ставки WB в виде массива и заказы других товаров в кампании (как в отчёте WB 25.11.2026)', async () => {
+  const { parseAdverts } = await import('../src/wb/collect.mjs');
+  const { openDb } = await import('../src/db.mjs');
+  const { adFact } = await import('../src/ads.mjs');
+  const [a] = parseAdverts({ adverts: [{ advertId: 42174321, nms: [{ bids: [{ type: 'search', value: 900 }], nmId: 1293557865, subject: { id: 406, name: 'чай' } }], settings: { name: 'Кампания от 24.11.2026', paymentType: 'cpc', placements: ['search'] }, status: 11, timestamps: { created: '2026-11-24T08:51:23+03:00', started: null } }] });
+  assert.deepEqual([a.advertId, a.status, a.bids[1293557865].search, a.placements], [42174321, 11, 9, { search: true, recommendations: false }]);
+
+  const db = openDb('', { memory: true });
+  const ins = db.prepare('INSERT INTO ads_daily(nm_id, date, advert_id, views, clicks, atbs, orders, shks, spend, order_sum) VALUES (?,?,?,?,?,?,?,?,?,?)');
+  ins.run(1293557865, '2026-11-24', 42174321, 390, 74, 12, 3, 0, 360.36, 3792);
+  ins.run(1293566093, '2026-11-24', 42174321, 0, 0, 2, 0, 0, 0, 0);
+  ins.run(1293557865, '2026-11-25', 42174321, 172, 25, 2, 0, 0, 168.87, 0);
+  ins.run(1293566093, '2026-11-25', 42174321, 0, 0, 1, 1, 0, 0, 1750);
+  const f = adFact(db, 42174321, 1293557865, '2026-11-24', '2026-11-25', 1264, { withOthers: true });
+  assert.deepEqual([f.views, f.clicks, f.orders, f.otherOrders, f.spend, f.orderSum, f.days], [562, 99, 4, 1, 529, 5542, 2]);
+  assert.equal(f.drrWbPct, 9.5); // 529,23 / 5542 — как «Доля затрат» в отчёте WB
+  const own = adFact(db, 42174321, 1293557865, '2026-11-24', '2026-11-25', 1264);
+  assert.equal(own.orders, 3);
+  db.close();
+});

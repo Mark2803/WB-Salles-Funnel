@@ -23,11 +23,11 @@
 
 | Данные | Метод WB | Как часто |
 | --- | --- | --- |
-| Переходы, корзины, заказы, выкупы по дням | `POST /api/analytics/v3/sales-funnel/products/history` | каждые 3 ч (последние 7 дней) |
-| Остатки, рейтинг, срок доставки | `POST /api/analytics/v3/sales-funnel/products` | каждые 3 ч |
-| Цены и скидки | `POST /api/v2/list/goods/filter` | каждые 3 ч |
-| Реклама: кампании и ставки (в т. ч. «готова к запуску»), показы, клики, CTR, расход, заказы | `GET /api/advert/v3/adverts`, `GET /adv/v3/fullstats` (новая кампания — с начала, до 30 дней) | каждые 3 ч |
-| Бюджет кампании, дневной лимит, рекомендуемые ставки WB | `POST /api/advert/v2/budget`, `GET /api/advert/v0/daily-limits`, `GET /api/advert/v0/bids/recommendations` | каждые 3 ч |
+| Переходы, корзины, заказы, выкупы по дням | `POST /api/analytics/v3/sales-funnel/products/history` | каждый час (последние 7 дней) |
+| Остатки, рейтинг, срок доставки | `POST /api/analytics/v3/sales-funnel/products` | каждый час |
+| Цены и скидки | `POST /api/v2/list/goods/filter` | каждый час |
+| Реклама: кампании и ставки (в т. ч. «готова к запуску»), показы, клики, CTR, расход, заказы | `GET /api/advert/v3/adverts`, `GET /adv/v3/fullstats` (новая кампания — с начала, до 30 дней) | каждый час |
+| Бюджет кампании, дневной лимит, рекомендуемые ставки WB | `POST /api/advert/v2/budget`, `GET /api/advert/v0/daily-limits`, `GET /api/advert/v0/bids/recommendations` | каждый час |
 | Комиссия WB по предмету (FBW) | `GET /api/v1/tariffs/commission` (common-api) | раз в сутки |
 | Отзывы | `GET /api/v1/feedbacks` | раз в сутки |
 | Фактические комиссия, логистика, хранение | `POST /api/finance/v1/sales-reports/detailed` | раз в сутки |

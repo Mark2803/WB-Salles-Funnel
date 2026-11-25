@@ -161,6 +161,26 @@ export const CAMPAIGN_STATUS = { 4: 'готова к запуску', 7: 'зав
 export const LIVE_STATUSES = [4, 9, 11];
 const rubFromKopecks = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v) / 100);
 
+// Ставки WB приходят в двух видах: массив [{ type: 'search', value: 900 }] (так отвечает WB на 25.11.2026)
+// или объект { search: 900, recommendations: 0 } (так в документации). Значения — в копейках.
+function parseBids(bids) {
+  const out = { search: null, recommendations: null };
+  if (Array.isArray(bids)) {
+    for (const b of bids) if (b && (b.type === 'search' || b.type === 'recommendations')) out[b.type] = rubFromKopecks(b.value ?? b.bid ?? b.bidKopecks);
+  } else if (bids && typeof bids === 'object') {
+    out.search = rubFromKopecks(bids.search);
+    out.recommendations = rubFromKopecks(bids.recommendations);
+  }
+  return out;
+}
+
+// Места показа: массив ['search'] или объект { search: true, recommendations: false }
+function parsePlacements(p) {
+  if (Array.isArray(p)) return { search: p.includes('search'), recommendations: p.includes('recommendations') };
+  if (p && typeof p === 'object') return { search: Boolean(p.search), recommendations: Boolean(p.recommendations) };
+  return null;
+}
+
 /** Кампании со всеми товарами, ставками (в рублях) и местами показа. */
 export function parseAdverts(resp) {
   // WB иногда отдаёт номер кампании как id, иногда как advertId; SQLite не принимает undefined — всё приводим к null
@@ -171,11 +191,11 @@ export function parseAdverts(resp) {
       name: a.settings?.name || a.name || '',
       status: a.status ?? null,
       paymentType: a.settings?.paymentType || a.paymentType || '',
-      placements: a.settings?.placements || null,
+      placements: parsePlacements(a.settings?.placements),
       nmIds: (a.nms || []).map((n) => Number(n.nmId)).filter((id) => Number.isFinite(id) && id > 0),
       subjects: (a.nms || []).filter((n) => n.subject?.id).map((n) => ({ nmId: n.nmId, id: n.subject.id, name: n.subject.name || null })),
       // Ставки WB отдаёт в копейках: за клик (cpc) или за 1000 показов (cpm)
-      bids: Object.fromEntries((a.nms || []).map((n) => [n.nmId, { search: rubFromKopecks(n.bids?.search), recommendations: rubFromKopecks(n.bids?.recommendations) }])),
+      bids: Object.fromEntries((a.nms || []).map((n) => [n.nmId, parseBids(n.bids)])),
       created: a.timestamps?.created || null,
       started: a.timestamps?.started || null,
       updated: a.timestamps?.updated || a.timestamps?.started || null,

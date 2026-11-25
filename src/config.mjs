@@ -50,7 +50,7 @@ export const config = {
   sessionSecret: env('SESSION_SECRET', ''),
   dataDir: path.resolve(ROOT_DIR, env('DATA_DIR', './data')),
   trackedNmIds: parseIds(env('TRACKED_NM_IDS', '')),
-  syncEveryHours: Math.max(1, Number(env('SYNC_EVERY_HOURS', '3')) || 3),
+  syncEveryHours: Math.max(1, Number(env('SYNC_EVERY_HOURS', '1')) || 1),
   mock: env('WB_MOCK', '0') === '1',
   // Себестоимость — из Google Таблицы «Финансы V3» (тот же ключ робота, что у Менеджмента)
   googleKeyFile: env('GOOGLE_SERVICE_ACCOUNT_FILE', ''),

@@ -668,7 +668,7 @@
               <h2>${esc(shortTitle(it.product.title, it.product.vendorCode) || it.nmId)}</h2>
               <p class="muted">«${esc(c.name)}» · ${esc(c.paymentLabel)} · <span class="tag ${c.status === 9 ? 'green' : 'grey'}">${esc(c.statusLabel)}</span>
                 ${c.placements ? ` · ${[c.placements.search ? 'поиск' : '', c.placements.recommendations ? 'рекомендации' : ''].filter(Boolean).join(' и ')}` : ''}
-                · запущена ${c.startedAt ? esc(String(c.startedAt).slice(0, 10)) : '—'} · <a href="#/product/${it.nmId}">товар ${it.nmId}</a></p>
+                · создана ${c.createdAt ? esc(String(c.createdAt).slice(0, 10)) : '—'} · <a href="#/product/${it.nmId}">товар ${it.nmId}</a></p>
             </div>
             <div class="ad-kpis">
               <div><span class="muted small">Бюджет кампании</span><b>${rub(c.budgetTotal)}</b></div>
@@ -679,11 +679,11 @@
           <div class="kpis">
             <div class="kpi"><div class="label">Показы · CTR</div><div class="value">${n(f.views)}</div><div class="delta muted">CTR ${pct(f.ctr, 2)}</div></div>
             <div class="kpi"><div class="label">Клики · цена клика</div><div class="value">${n(f.clicks)}</div><div class="delta muted">${f.cpc != null ? `${n(f.cpc, 2)} ₽ за клик` : '—'}</div></div>
-            <div class="kpi"><div class="label">Заказы с рекламы</div><div class="value">${n(f.orders)}</div><div class="delta muted">конверсия ${pct(f.cr, 2)} · корзина ${pct(f.cartRate)}</div></div>
+            <div class="kpi"><div class="label">Заказы с рекламы</div><div class="value">${n(f.orders)}</div><div class="delta muted">конверсия ${pct(f.cr, 2)} · корзина ${pct(f.cartRate)}${f.otherOrders ? `<br/>в т. ч. ${n(f.otherOrders)} — другие ваши товары (${rub(f.otherOrderSum)})` : ''}</div></div>
             <div class="kpi"><div class="label">Расход</div><div class="value">${rub(f.spend)}</div><div class="delta muted">заказ ${rub(f.costPerOrder)}</div></div>
             <div class="kpi"><div class="label">ДРР</div><div class="value">${pct(f.drrPct)}</div><div class="delta muted">в кабинете WB ${pct(f.drrWbPct)} (от цены покупателя)</div></div>
           </div>
-          <p class="small muted">Факт с ${esc(f.from)} по ${esc(f.to)} (${n(f.days)} дн. с данными). WB отдаёт статистику с задержкой до нескольких часов.</p>
+          <p class="small muted">Факт с ${esc(f.from)} по ${esc(f.to)} (${n(f.days)} дн. с данными), по последнему сбору данных. WB отдаёт статистику рекламы с задержкой до нескольких часов, поэтому в кабинете цифры могут быть свежее. Заказы — как в отчёте WB: вместе с заказами других ваших товаров после клика по рекламе.</p>
           <div class="grid two">
             <div><h3>Что сделать</h3><ul class="alerts">${it.recommendations.map((r) => `<li class="${levelCls[r.level] || 'info'}">${esc(r.text)}</li>`).join('') || '<li class="info">Пока нечего советовать.</li>'}</ul>
               <h3>Прогноз и факт</h3>${compareTable(it)}
