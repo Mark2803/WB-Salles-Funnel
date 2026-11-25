@@ -4,6 +4,29 @@
   const $app = document.getElementById('app');
   const C = window.Charts;
 
+
+  // Юнит-экономика: каждая строка — с источником; чего нет — так и написано (никаких придуманных цифр)
+  function unitTable(u) {
+    const price = u.price;
+    const part = (pctV) => (price != null && pctV != null ? (price * pctV) / 100 : null);
+    const src = (t) => (t ? `<span class="small muted">(${esc(t)})</span>` : '');
+    const none = (why) => `<span class="down small">нет данных${why ? ` — ${esc(why)}` : ''}</span>`;
+    const row = (label, value, source, tip) => `<tr><td>${tip ? `<span class="term" tabindex="0" data-tip="${esc(tip)}">${esc(label)}</span>` : esc(label)} ${source}</td><td class="num">${value}</td></tr>`;
+    return `
+      <table class="data compact"><tbody>
+        ${row('Цена продажи', rub(price), src('ваша цена после вашей скидки, из WB'), 'Цена, по которой продаёте после вашей скидки. От неё WB считает комиссию.')}
+        ${row(`Комиссия WB${u.commissionPct != null ? ` ${pct(u.commissionPct)}` : ''}`, u.commissionPct != null ? `−${rub(part(u.commissionPct))}` : none(), src(u.commissionSource), 'Процент, который WB забирает с продажи. Тариф WB по предмету товара, после первых продаж — факт из финотчёта.')}
+        ${row(`Эквайринг${u.acquiringPct != null ? ` ${pct(u.acquiringPct, 2)}` : ''}`, u.acquiringPct != null ? `−${rub(part(u.acquiringPct))}` : none('появится из финотчёта WB'), src(u.acquiringSource), 'Плата за приём оплаты картой. WB удерживает её в финотчёте; отдельного тарифа в API нет.')}
+        ${row(`Налог${u.taxPct != null ? ` ${pct(u.taxPct)}` : ''}`, u.taxPct != null ? `−${rub(part(u.taxPct))}` : none('укажите ставку в «Настройках»'), src(u.taxPct != null ? 'ваша ставка из «Настроек»' : ''), 'Зависит от вашей системы налогообложения. Считается от цены продажи.')}
+        ${row('Логистика на проданную штуку', u.logisticsPerSold != null ? `−${rub(u.logisticsPerSold)}` : none(), src([u.logisticsSource, u.logisticsDetail].filter(Boolean).join('; ')), 'Доставка до покупателя по тарифу WB для склада, где лежит товар: первый литр + доп. литры. На проданную штуку — с учётом невыкупов (÷ доля выкупа).')}
+        ${row('Хранение на проданную штуку', u.storagePerSold != null ? `−${rub(u.storagePerSold)}` : none(), src([u.storageSource, u.storageDetail].filter(Boolean).join('; ')), 'Хранение начисляется за каждый день по тарифу склада за литраж. На штуку = тариф в день × сколько дней товар пролежит до продажи.')}
+        ${row('Себестоимость', u.cost != null ? `−${rub(u.cost)}` : none('лист «Себестоимость»'), src(u.cost != null ? '«Финансы V3»' : ''))}
+        <tr class="total"><td><b>Прибыль с продажи до рекламы</b></td><td class="num"><b>${rub(u.profitPerUnit)}</b></td></tr>
+        ${row(`× выкуп ${u.buyoutPct != null ? pct(u.buyoutPct, 0) : '—'} = прибыль с заказа`, u.profitPerUnit != null ? rub(u.buyoutPct != null ? (u.profitPerUnit * u.buyoutPct) / 100 : u.profitPerUnit) : '—', src(u.buyoutSource || 'выкуп неизвестен — без учёта невыкупов'), 'Из 100 заказов покупатели забирают столько. Реклама платится за каждый заказ, а деньги приходят только за выкупленные.')}
+      </tbody></table>
+      ${u.missing?.length ? `<div class="warn small"><b>Расчёт неполный</b>, не учтено: ${u.missing.map(esc).join('; ')}.</div>` : '<p class="small good">Все строки — по данным WB и вашим.</p>'}`;
+  }
+
   // Шпаргалка: что значит каждый показатель. Наведите мышку (или нажмите) на подчёркнутое слово.
   const TERMS = {
     'Показы': { text: 'Сколько раз карточку показали покупателям в рекламе (поиск или рекомендации).', act: 'Мало показов — ставка ниже конкурентов или узкие запросы.' },
@@ -312,18 +335,11 @@
       </div>
       <div class="grid two">
         <div class="panel"><h2>Юнит-экономика</h2>
+          ${unitTable(u)}
           <div class="kv">
-            <div>Цена продавца</div><div class="num">${rub(u.price)}</div>
-            <div>Себестоимость</div><div class="num">${u.cost == null ? '<span class="muted">не указана</span>' : `${n(u.cost, 2)} ₽`}</div>
-            <div>Комиссия WB</div><div class="num">${pct(u.commissionPct)}</div>
-            <div>Логистика на продажу</div><div class="num">${rub(u.logisticsPerSold)}</div>
-            <div>Хранение и приёмка на продажу</div><div class="num">${rub(u.storagePerSold)}</div>
-            <div><b>Прибыль с продажи до рекламы</b></div><div class="num"><b>${rub(u.profitPerUnit)}</b></div>
             <div>Цена безубыточности</div><div class="num">${rub(u.breakEvenPrice)}</div>
             <div>Предельная реклама на продажу</div><div class="num">${rub(u.maxAdPerSale)}</div>
-            <div>Рабочая реклама на продажу</div><div class="num">${rub(u.workAdPerSale)}</div>
           </div>
-          <p class="small muted">${u.source === 'finance' ? 'Комиссия и логистика — фактические, из финотчёта WB за 30 дней.' : 'Комиссия и логистика — из настроек (финотчёта по товару ещё нет).'}</p>
           ${
             s.costSource === 'sheet'
               ? `<p class="small muted">Себестоимость — из таблицы «Финансы V3», лист «Себестоимость». Изменить: <a href="/management/costs/" target="_blank" rel="noopener">Менеджмент → Себестоимость</a>.</p>`
@@ -647,23 +663,8 @@
     const bidUnit = (c) => (c.paymentType === 'cpm' ? '₽ за 1000 показов' : '₽ за клик');
     const levelCls = { critical: 'critical', warning: 'warning', info: 'info', good: 'good' };
 
-    const econTable = (it) => {
-      const u = it.unit;
-      const i = it.inputs;
-      const e = it.economics;
-      return `
-        <table class="data compact"><tbody>
-          <tr><td>Цена продажи (ваша, после скидки)</td><td class="num">${rub(i.price)}</td></tr>
-          <tr><td>Комиссия WB ${pct(u.commissionPct)} <span class="small muted">(${esc(u.commissionSource)})</span></td><td class="num">−${rub(i.price != null ? (i.price * u.commissionPct) / 100 : null)}</td></tr>
-          <tr><td>Эквайринг ${pct(u.acquiringPct)} и налог ${pct(u.taxPct)} <span class="small muted">(настройки)</span></td><td class="num">−${rub(i.price != null ? (i.price * (u.acquiringPct + u.taxPct)) / 100 : null)}</td></tr>
-          <tr><td>Логистика на проданную штуку <span class="small muted">(${esc(u.logisticsSource)}, с учётом невыкупов)</span></td><td class="num">−${rub(u.logisticsPerSold)}</td></tr>
-          <tr><td>Хранение и приёмка</td><td class="num">−${rub(u.storagePerSold)}</td></tr>
-          <tr><td>Себестоимость <span class="small muted">(«Финансы V3»)</span></td><td class="num">${u.cost != null ? `−${rub(u.cost)}` : '<span class="bad">не указана</span>'}</td></tr>
-          <tr class="total"><td>Прибыль с продажи до рекламы</td><td class="num"><b>${rub(u.profitPerUnit)}</b></td></tr>
-          <tr><td>× выкуп ${pct(u.buyoutPct, 0)} = <b>прибыль с заказа до рекламы</b></td><td class="num"><b>${rub(e.profitPerOrder)}</b></td></tr>
-          <tr><td>Это потолок ДРР: реклама дороже — в минус</td><td class="num">${pct(e.breakEvenDrrPct)}</td></tr>
-        </tbody></table>`;
-    };
+    const econTable = (it) => `${unitTable(it.unit)}
+      <p class="small">Потолок ДРР: <b>${pct(it.economics.breakEvenDrrPct)}</b> — прибыль с заказа в процентах от цены. Реклама дороже — каждый заказ в минус.</p>`;
 
     const clickTable = (it) => {
       const i = it.inputs;
@@ -673,7 +674,7 @@
       return `
         <table class="data compact"><tbody>
           <tr><td>${term('Ставка', 'Ставка в кабинете')}</td><td class="num">${r1(i.bid)} ${bidUnit(c)}</td></tr>
-          <tr><td>${term('CPC', 'Цена клика (CPC)')} <span class="small muted">(${esc(i.chargeSource)}${c.paymentType === 'cpm' ? `; CTR ${pct(i.ctr * 100, 2)} — ${esc(i.ctrSource)}` : ''})</span></td><td class="num">${r1(e.cpc, 2)} ₽</td></tr>
+          <tr><td>${term('CPC', 'Цена клика (CPC)')} <span class="small muted">(${esc(i.chargeSource)}${c.paymentType === 'cpm' ? `; CTR ${i.ctr != null ? pct(i.ctr * 100, 2) : '—'} — ${esc(i.ctrSource)}` : ''})</span></td><td class="num">${r1(e.cpc, 2)} ₽</td></tr>
           <tr><td>${term('CR', 'Конверсия клика в заказ (CR)')} <span class="small muted">(${esc(i.crSource)})</span></td><td class="num">${pct(e.cr, 2)}</td></tr>
           <tr><td>${term('CPO', 'Заказ с рекламы стоит (CPO)')} <span class="small muted">(цена клика ÷ конверсия)</span></td><td class="num">${rub(e.costPerOrder)}</td></tr>
           <tr><td>${term('ДРР')} <span class="small muted">(цена клика ÷ (конверсия × цена))</span></td><td class="num"><b>${pct(e.drrPct)}</b> <span class="small muted">цель ${pct(d.targetDrrPct, 0)}</span></td></tr>
@@ -753,7 +754,7 @@
               <label>Ставка, ${bidUnit(c)}<br/><input type="number" step="0.1" min="0" data-f="bid" value="${it.inputs.bid ?? ''}"/></label>
               <label>Бюджет в день, ₽<br/><input type="number" step="10" min="0" data-f="dailyBudget" value="${it.inputs.dailyBudget ?? ''}"/></label>
               <label>Конверсия клика в заказ, %<br/><input type="number" step="0.1" min="0" data-f="crPct" value="${it.economics.cr ?? ''}"/></label>
-              ${c.paymentType === 'cpm' ? `<label>CTR, %<br/><input type="number" step="0.1" min="0" data-f="ctrPct" value="${n(it.inputs.ctr * 100, 2).replace(',', '.')}"/></label>` : ''}
+              ${c.paymentType === 'cpm' ? `<label>CTR, %<br/><input type="number" step="0.1" min="0" data-f="ctrPct" value="${it.inputs.ctr != null ? n(it.inputs.ctr * 100, 2).replace(',', '.') : ''}"/></label>` : ''}
               <button class="btn" type="button" data-calc="${idx}">Пересчитать</button>
             </div>
             <div class="calc-out" id="calcOut${idx}">${perDayLine(it.economics.perDay, 'Сейчас')}${scenarioTable(it.scenarios, c)}</div>
@@ -857,27 +858,34 @@
         ${d.products.some((p) => p.cost_source !== 'sheet') ? '<p><button class="btn" id="btnCosts" type="button">Сохранить себестоимость</button></p>' : ''}
       </div>
       <div class="grid two">
-        <div class="panel"><h2>Юнит-экономика по умолчанию</h2>
-          <p class="small muted">Используется, пока по товару нет данных финотчёта WB (тогда комиссия и логистика берутся фактические).</p>
-          ${field('commissionPct', 'Комиссия WB', '%', 'Проверьте в кабинете: «Тарифы» → «Комиссия», предмет «Чай»')}
-          ${field('acquiringPct', 'Эквайринг', '%')}
-          ${field('taxPct', 'Налог', '% от цены')}
-          ${field('logisticsPerDelivery', 'Логистика за доставку', '₽')}
-          ${field('returnLogistics', 'Обратная логистика', '₽')}
-          ${field('storagePerUnit', 'Хранение и приёмка на штуку', '₽')}
-          ${field('defaultBuyoutPct', 'Процент выкупа', '%')}
-          ${field('costPerReviewPoint', 'Стоимость 1 балла за отзыв', '₽')}
+        <div class="panel"><h2>Налог</h2>
+          <p class="small muted">Единственное в расходах, чего нет у WB: зависит от вашей системы налогообложения. Комиссия, логистика, хранение, объём упаковки и выкуп берутся только из WB.</p>
+          <label class="param"><div class="row"><span>Налог, % от цены продажи</span><span class="muted">%</span></div>
+            <input type="number" step="0.1" min="0" max="100" data-set="taxPct" value="${s.taxPct ?? ''}" placeholder="не задан" />
+            <div class="hint">${s.taxPct == null ? '<b class="down">Не задан</b> — прибыль считается без налога, и это видно в расчёте.' : 'Пусто — «не задан».'}</div></label>
         </div>
-        <div class="panel"><h2>Цели и пороги тревог</h2>
+        <div class="panel"><h2>Ваши цели и пороги тревог</h2>
           ${field('targetDrrPct', 'Цель по ДРР', '%', 'Выше — тревога «ДРР выше цели»')}
           ${field('targetProfitPerUnit', 'Желаемая прибыль с продажи после рекламы', '₽')}
           ${field('minStockDays', 'Минимальный запас', 'дней')}
           ${field('minRating', 'Минимальный рейтинг', '★')}
-          <p><button class="btn" id="btnSettings" type="button">Сохранить настройки</button></p>
+          ${field('costPerReviewPoint', 'Стоимость 1 балла за отзыв (для стратегии «Отзывы»)', '₽')}
         </div>
       </div>
+      <p><button class="btn" id="btnSettings" type="button">Сохранить настройки</button></p>
+      <div class="panel"><h2>Тарифы WB (обновляются раз в сутки)</h2>
+        <p class="small muted">Официальные тарифы из API WB: «Тарифы для коробов» и «Комиссия по категориям» (те же, что в кабинете → «Тарифы»). Любое изменение по вашим складам и предметам записывается ниже и в «Журнал».${d.tariffs.nextBoxDate ? ` <b>WB объявил новые тарифы коробов с ${esc(String(d.tariffs.nextBoxDate).slice(0, 10))}.</b>` : ''}</p>
+        <h3>Комиссия</h3>
+        ${d.tariffs.commission.length ? `<table class="data compact"><thead><tr><th>Предмет</th><th class="num">FBW (склад WB)</th><th class="num">FBS (ваш склад)</th><th>Обновлено</th></tr></thead><tbody>${d.tariffs.commission.map((c) => `<tr><td>${esc(c.subject_name)}</td><td class="num">${pct(c.fbw_pct)}</td><td class="num">${pct(c.fbs_pct)}</td><td class="small muted">${esc(String(c.updated_at || '').slice(0, 10))}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">Ещё не загружено (полный сбор раз в сутки).</p>'}
+        <h3>Склады, где лежат ваши товары</h3>
+        ${d.tariffs.warehouses.length ? `<table class="data compact"><thead><tr><th>Склад</th><th class="num">Ваш остаток</th><th class="num">Логистика: 1-й литр</th><th class="num">доп. литр</th><th class="num">Хранение в день: 1-й литр</th><th class="num">доп. литр</th><th class="num">Коэф. склада</th><th>Тариф на</th></tr></thead><tbody>${d.tariffs.warehouses.map((w) => `<tr><td>${esc(w.warehouse)}</td><td class="num">${n(w.qty)}</td><td class="num">${n(w.delivery_base, 2)} ₽</td><td class="num">${n(w.delivery_liter, 2)} ₽</td><td class="num">${n(w.storage_base, 3)} ₽</td><td class="num">${n(w.storage_liter, 3)} ₽</td><td class="num">${pct(w.delivery_coef, 0)} / ${pct(w.storage_coef, 0)}</td><td class="small muted">${esc(w.tariff_date || '')}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">Ещё не загружено (полный сбор раз в сутки).</p>'}
+        <h3>Размеры упаковки (из карточек WB)</h3>
+        <table class="data compact"><thead><tr><th>Товар</th><th class="num">Д × Ш × В, см</th><th class="num">Объём, л</th><th class="num">Вес, кг</th></tr></thead><tbody>${d.products.map((p) => `<tr><td>${esc(shortTitle(p.title, p.vendor_code))}</td><td class="num">${p.length_cm ? `${n(p.length_cm, 1)} × ${n(p.width_cm, 1)} × ${n(p.height_cm, 1)}` : '<span class="down">нет — нужна категория токена «Контент»</span>'}</td><td class="num">${p.length_cm ? n((p.length_cm * p.width_cm * p.height_cm) / 1000, 3) : '—'}</td><td class="num">${p.weight_kg != null ? n(p.weight_kg, 3) : '—'}</td></tr>`).join('')}</tbody></table>
+        <h3>История изменений тарифов</h3>
+        ${d.tariffs.changes.length ? `<table class="data compact"><thead><tr><th>Когда</th><th>Что</th><th class="num">Было</th><th class="num">Стало</th></tr></thead><tbody>${d.tariffs.changes.map((c) => `<tr><td class="small">${esc(new Date(c.changed_at).toLocaleString('ru-RU'))}</td><td>${esc(c.item)} — ${esc(c.field)}</td><td class="num">${n(c.old_value, 3)}</td><td class="num">${n(c.new_value, 3)}</td></tr>`).join('')}</tbody></table>` : '<p class="empty">Изменений пока не было (отслеживание началось с первой загрузки).</p>'}
+      </div>
       <div class="panel"><h2>Сбор данных из WB</h2>
-        <p>${d.mock ? '<span class="tag">тестовый режим</span> ' : ''}Токен WB: ${d.tokenSet ? '<span class="tag green">задан</span>' : '<span class="tag grey">не задан</span>'} · воронка, цены, остатки и реклама обновляются автоматически каждые несколько часов, отзывы, финотчёт и поиск — раз в сутки.</p>
+        <p>${d.mock ? '<span class="tag">тестовый режим</span> ' : ''}Токен WB: ${d.tokenSet ? '<span class="tag green">задан</span>' : '<span class="tag grey">не задан</span>'} · воронка, цены, остатки и реклама обновляются сами каждый час; тарифы, размеры упаковки, остатки по складам, отзывы и финотчёт — раз в сутки.</p>
         <p><button class="btn ghost" id="btnQuick" type="button" ${d.syncRunning ? 'disabled' : ''}>Быстрое обновление</button> <button class="btn ghost" id="btnFull" type="button" ${d.syncRunning ? 'disabled' : ''}>Полное обновление</button></p>
         ${
           d.runs.length

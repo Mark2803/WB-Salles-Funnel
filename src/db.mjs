@@ -5,17 +5,13 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 // Настройки по умолчанию (меняются на вкладке «Настройки»)
+// Решение Марка (25.11.2026): никаких придуманных цифр в расходах. Комиссия, логистика, хранение — из тарифов WB
+// и финотчёта, объём упаковки — из карточки WB, выкуп — из аналитики WB. Здесь только то, что знает лишь Марк:
+// налог (его система налогообложения) и его собственные цели.
 export const DEFAULT_SETTINGS = {
-  // Юнит-экономика: используется, пока нет данных финотчёта WB
-  commissionPct: 17,
-  acquiringPct: 2,
-  taxPct: 6,
-  logisticsPerDelivery: 45,
-  returnLogistics: 50,
-  storagePerUnit: 5,
-  defaultBuyoutPct: 95,
-  defaultCostPerUnit: 0,
-  // Цели и пороги для тревог
+  // Налог, % от цены продажи (зависит от системы налогообложения Марка). Пусто — расчёт помечается неполным.
+  taxPct: null,
+  // Цели и пороги для тревог — выбор Марка, не данные WB
   targetDrrPct: 20,
   targetProfitPerUnit: 80,
   minStockDays: 14,
@@ -210,6 +206,43 @@ const MIGRATIONS = [
   `
   ALTER TABLE campaigns ADD COLUMN budget_spent_at TEXT;
   `,
+  // 6 — реальные размеры упаковки из карточки WB, тарифы коробов по складам, остатки по складам, история изменений тарифов
+  `
+  ALTER TABLE products ADD COLUMN length_cm REAL;
+  ALTER TABLE products ADD COLUMN width_cm REAL;
+  ALTER TABLE products ADD COLUMN height_cm REAL;
+  ALTER TABLE products ADD COLUMN weight_kg REAL;
+  ALTER TABLE products ADD COLUMN dims_updated_at TEXT;
+  CREATE TABLE box_tariffs (
+    warehouse TEXT PRIMARY KEY,
+    geo TEXT,
+    delivery_base REAL,
+    delivery_liter REAL,
+    delivery_coef REAL,
+    storage_base REAL,
+    storage_liter REAL,
+    storage_coef REAL,
+    tariff_date TEXT,
+    next_date TEXT,
+    updated_at TEXT
+  );
+  CREATE TABLE stock_wh (
+    nm_id INTEGER NOT NULL,
+    warehouse TEXT NOT NULL,
+    qty INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    PRIMARY KEY (nm_id, warehouse)
+  );
+  CREATE TABLE tariff_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    changed_at TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    item TEXT NOT NULL,
+    field TEXT NOT NULL,
+    old_value REAL,
+    new_value REAL
+  );
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {
@@ -247,6 +280,7 @@ export function getSettings(db) {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const s = { ...DEFAULT_SETTINGS };
   for (const r of rows) {
+    if (!(r.key in DEFAULT_SETTINGS)) continue; // старые настройки с придуманными цифрами больше не используются
     try {
       s[r.key] = JSON.parse(r.value);
     } catch {
@@ -261,6 +295,11 @@ export function saveSettings(db, patch) {
   const stmt = db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
   for (const [k, v] of Object.entries(patch)) {
     if (!allowed.includes(k)) continue;
+    // Пустое значение — «не задано» (например, налог)
+    if (v === null || v === '') {
+      db.prepare('DELETE FROM settings WHERE key = ?').run(k);
+      continue;
+    }
     const num = Number(v);
     if (!Number.isFinite(num) || num < 0) throw new Error(`Некорректное значение «${k}»`);
     stmt.run(k, JSON.stringify(num));

@@ -26,7 +26,9 @@ const STEPS = {
   prices: { label: 'Цены', fn: collect.collectPrices },
   costs: { label: 'Себестоимость (таблица «Финансы V3»)', fn: (client, db, nmIds, today, ctx) => collectCosts(ctx.costsSource, db) },
   ads: { label: 'Реклама', fn: collect.collectAds },
-  tariffs: { label: 'Комиссии WB (тарифы)', fn: (client, db) => collect.collectTariffs(client, db) },
+  dimensions: { label: 'Размеры упаковки (карточки WB)', fn: collect.collectDimensions },
+  stocksWh: { label: 'Остатки по складам WB', fn: collect.collectStocksByWarehouse },
+  tariffs: { label: 'Тарифы WB: комиссия, логистика, хранение', fn: collect.collectTariffs },
   feedbacks: { label: 'Отзывы', fn: collect.collectFeedbacks },
   finance: { label: 'Финансовый отчёт', fn: collect.collectFinance },
   search: { label: 'Поиск и позиции («Джем»)', fn: collect.collectSearch },
@@ -34,7 +36,7 @@ const STEPS = {
 
 // Реклама — первой: товары с действующей рекламой добавляются в отслеживаемые и попадают в остальные шаги
 export const QUICK = ['ads', 'funnel', 'summary', 'prices', 'costs'];
-export const FULL = ['ads', 'funnel', 'summary', 'prices', 'costs', 'tariffs', 'feedbacks', 'finance', 'search'];
+export const FULL = ['ads', 'funnel', 'summary', 'prices', 'costs', 'dimensions', 'stocksWh', 'tariffs', 'feedbacks', 'finance', 'search'];
 
 /** Товары из действующих рекламных кампаний (готова к запуску, активна, на паузе). */
 export function campaignNmIds(db) {

@@ -29,8 +29,6 @@ const parse = (s, fallback) => {
 export const PAYMENT_LABEL = { cpc: 'оплата за клик', cpm: 'оплата за 1000 показов' };
 const MIN_CLICKS_FOR_CR = 100; // меньше — конверсия рекламы ещё случайна
 const MIN_VIEWS_FOR_CTR = 1000;
-const DEFAULT_CR = 0.03; // допущение для старта: 3% кликов становятся заказом
-const DEFAULT_CTR = 0.03; // допущение для оплаты за показы
 const VOLUME_ELASTICITY = 0.7; // допущение: ставка ×2 даёт кликов примерно ×1,6
 
 // ---------- Чистые расчёты (проверяются тестами) ----------
@@ -57,7 +55,8 @@ export function bidForCpc({ paymentType, ctr, chargeRatio = 1 }, cpc) {
  */
 export function adEconomics(inputs) {
   const { price, profitPerUnit, cr } = inputs;
-  const buyout = (inputs.buyoutPct ?? 95) / 100;
+  // Выкуп неизвестен — без учёта невыкупов (100%); это видно в юнит-экономике как «нет данных»
+  const buyout = (inputs.buyoutPct ?? 100) / 100;
   const cpc = effectiveCpc(inputs);
   const profitPerOrder = profitPerUnit != null ? profitPerUnit * buyout : null;
   const costPerOrder = cpc != null && cr ? cpc / cr : null;
@@ -291,18 +290,24 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
   } else if (organicCr) {
     cr = organicCr;
     crSource = `карточки за 30 дней (${organic.orders} заказов из ${organic.open} переходов)`;
+  } else if (fact.clicks > 0) {
+    cr = fact.orders / fact.clicks;
+    crSource = `рекламы, но данных мало (${fact.orders} заказов из ${fact.clicks} кликов) — цифра случайна`;
   } else {
-    cr = DEFAULT_CR;
-    crSource = 'по допущению 3% (данных пока мало)';
+    cr = null;
+    crSource = 'нет данных: у кампании ещё нет кликов, а у карточки меньше 100 переходов за 30 дней';
   }
   let ctr;
   let ctrSource;
   if (fact.views >= MIN_VIEWS_FOR_CTR) {
     ctr = fact.clicks / fact.views;
     ctrSource = 'факт рекламы';
+  } else if (fact.views > 0) {
+    ctr = fact.clicks / fact.views;
+    ctrSource = `факт рекламы, но показов мало (${fact.views})`;
   } else {
-    ctr = DEFAULT_CTR;
-    ctrSource = 'допущение 3%';
+    ctr = null;
+    ctrSource = 'нет данных: у кампании ещё нет показов';
   }
   const bids = campaign.bids?.[nmId] || {};
   const bid = bids.search ?? bids.recommendations ?? null;
@@ -344,7 +349,7 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
     budgetSource,
     price,
     profitPerUnit: summary.unit.profitPerUnit,
-    buyoutPct: summary.unit.buyoutPct ?? settings.defaultBuyoutPct,
+    buyoutPct: summary.unit.buyoutPct ?? null,
     targetDrrPct: settings.targetDrrPct,
     ...overrides,
   };

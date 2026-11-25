@@ -336,7 +336,17 @@ export function createApi({ db, cfg, log = console, verifyToken }) {
   // ---------- Настройки и синхронизация ----------
   route('GET', '/api/settings', () => ({
     settings: getSettings(db),
-    products: db.prepare('SELECT nm_id, title, vendor_code, group_name, cost_per_unit, cost_source, cost_updated_at FROM products WHERE active = 1 ORDER BY sort').all(),
+    products: db.prepare(`SELECT nm_id, title, vendor_code, group_name, cost_per_unit, cost_source, cost_updated_at,
+        length_cm, width_cm, height_cm, weight_kg, dims_updated_at, subject_name FROM products WHERE active = 1 ORDER BY sort`).all(),
+    // Тарифы WB: склады, где лежат товары, комиссия по предметам, история изменений
+    tariffs: {
+      warehouses: db.prepare(`SELECT t.*, SUM(s.qty) qty FROM box_tariffs t JOIN stock_wh s ON s.warehouse = t.warehouse AND s.qty > 0
+        JOIN products p ON p.nm_id = s.nm_id AND p.active = 1 GROUP BY t.warehouse ORDER BY qty DESC`).all(),
+      commission: db.prepare(`SELECT DISTINCT t.subject_name, t.fbw_pct, t.fbs_pct, t.updated_at FROM subject_tariffs t
+        JOIN products p ON p.subject_id = t.subject_id AND p.active = 1`).all(),
+      nextBoxDate: db.prepare('SELECT next_date FROM box_tariffs WHERE next_date IS NOT NULL AND next_date <> \'\' LIMIT 1').get()?.next_date || null,
+      changes: db.prepare('SELECT * FROM tariff_changes ORDER BY id DESC LIMIT 50').all(),
+    },
     runs: lastRuns(db, 10),
     syncRunning: isSyncRunning(),
     mock: cfg.mock,

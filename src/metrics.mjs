@@ -6,40 +6,155 @@ const round = (v, d = 1) => (v == null || !Number.isFinite(v) ? null : Math.roun
 const div = (a, b) => (b ? a / b : null);
 
 // ---------- Юнит-экономика ----------
-// Та же формула, что в калькуляторе: прибыль = цена × (1 − комиссия − эквайринг − налог) − расходы на штуку
-// Комиссия: факт из финотчёта → официальный тариф WB по предмету (FBW) → значение из настроек.
-export function unitEconomics({ price, cost, settings, actual = null, tariff = null }) {
-  const buyout = (actual?.buyoutPct ?? settings.defaultBuyoutPct) / 100 || 0.95;
-  const commissionPct = actual?.commissionPct ?? tariff?.pct ?? settings.commissionPct;
-  const commissionSource = actual?.commissionPct != null
-    ? 'финотчёт WB за 30 дней'
-    : tariff?.pct != null ? `тариф WB, предмет «${tariff.subjectName || '—'}» (FBW)` : 'настройки';
-  const pctShare = (commissionPct + settings.acquiringPct + settings.taxPct) / 100;
-  // Логистика на выкупленную штуку: из финотчёта (уже включает невыкупы) или по формуле
-  const logisticsPerSold = actual?.logisticsPerSold ?? settings.logisticsPerDelivery / buyout + settings.returnLogistics * (1 / buyout - 1);
-  const storage = actual?.storagePerSold ?? settings.storagePerUnit;
+// Только реальные данные (решение Марка 25.11.2026): ни одной придуманной цифры.
+//   комиссия      — финотчёт WB за 30 дней → официальный тариф WB по предмету (FBW)
+//   эквайринг     — финотчёт WB (в API тарифа нет)
+//   налог         — ставка Марка из «Настроек» (зависит от его системы налогообложения)
+//   логистика     — финотчёт → тариф WB для коробов на складах, где лежит товар: первый литр + доп. литры × (литры − 1)
+//   хранение      — финотчёт → тариф WB в день за литраж × дней до продажи (остаток ÷ продажи в день)
+//   объём         — длина × ширина × высота упаковки из карточки WB ÷ 1000
+//   выкуп         — аналитика WB по товару за 30 дней
+// Чего нет — в расчёт не входит и перечисляется в missing; если нет себестоимости или комиссии, прибыль не считается.
+
+/** Тариф короба по формуле WB: первый литр + доп. литр × (литры − 1). */
+export function boxTariff(base, perLiter, liters) {
+  if (base == null || liters == null) return null;
+  return base + Math.max(0, liters - 1) * (perLiter ?? 0);
+}
+
+export function unitEconomics({ price, cost, settings, inputs = {} }) {
+  const missing = [];
   const hasCost = cost != null && cost > 0;
-  const fixed = (hasCost ? cost : 0) + logisticsPerSold + storage;
-  const profit = price != null ? price * (1 - pctShare) - fixed : null;
+  if (!hasCost) missing.push('себестоимость (лист «Себестоимость» в «Финансы V3»)');
+  const buyoutPct = inputs.buyoutPct ?? null;
+  const buyout = buyoutPct != null && buyoutPct > 0 ? buyoutPct / 100 : null;
+  if (buyout == null) missing.push('процент выкупа (WB ещё не дал данных по выкупам)');
+
+  const commissionPct = inputs.commission?.pct ?? null;
+  if (commissionPct == null) missing.push('комиссия WB (нет тарифа по предмету товара)');
+  const acquiringPct = inputs.acquiring?.pct ?? null;
+  if (acquiringPct == null) missing.push('эквайринг (появится из финотчёта WB после первых продаж)');
+  const taxPct = settings.taxPct ?? null;
+  if (taxPct == null) missing.push('налог (укажите вашу ставку в «Настройках»)');
+
+  // Логистика на проданную штуку: факт уже включает невыкупы; по тарифу — доставка ÷ доля выкупа
+  let logisticsPerSold = null;
+  let logisticsSource = null;
+  if (inputs.fact?.logisticsPerSold != null) {
+    logisticsPerSold = inputs.fact.logisticsPerSold;
+    logisticsSource = 'финотчёт WB за 30 дней';
+  } else if (inputs.logistics?.perDelivery != null) {
+    logisticsPerSold = inputs.logistics.perDelivery / (buyout ?? 1);
+    logisticsSource = inputs.logistics.source;
+    if (buyout != null && buyout < 1) missing.push('обратная логистика невыкупов (тарифа нет в API WB — появится из финотчёта)');
+  } else missing.push(inputs.logistics?.why || 'логистика (нет объёма упаковки или тарифа склада)');
+
+  let storagePerSold = null;
+  let storageSource = null;
+  if (inputs.fact?.storagePerSold != null) {
+    storagePerSold = inputs.fact.storagePerSold;
+    storageSource = 'финотчёт WB за 30 дней (хранение и приёмка)';
+  } else if (inputs.storage?.perDay != null && inputs.storage?.days != null) {
+    storagePerSold = inputs.storage.perDay * inputs.storage.days;
+    storageSource = inputs.storage.source;
+  } else missing.push(inputs.storage?.why || 'хранение (нет объёма упаковки или тарифа склада)');
+
+  const pctShare = ((commissionPct ?? 0) + (acquiringPct ?? 0) + (taxPct ?? 0)) / 100;
+  const fixed = (hasCost ? cost : 0) + (logisticsPerSold ?? 0) + (storagePerSold ?? 0);
+  const canProfit = price != null && hasCost && commissionPct != null;
+  const profit = canProfit ? price * (1 - pctShare) - fixed : null;
   return {
     price,
     cost: hasCost ? cost : null,
     commissionPct: round(commissionPct, 1),
-    commissionSource,
-    acquiringPct: settings.acquiringPct,
-    taxPct: settings.taxPct,
-    buyoutPct: round(buyout * 100, 0),
-    logisticsSource: actual?.logisticsPerSold != null ? 'финотчёт WB за 30 дней' : 'настройки',
+    commissionSource: inputs.commission?.source ?? null,
+    acquiringPct: round(acquiringPct, 2),
+    acquiringSource: inputs.acquiring?.source ?? null,
+    taxPct,
+    buyoutPct: buyoutPct != null ? round(buyoutPct, 0) : null,
+    buyoutSource: inputs.buyoutSource ?? null,
     logisticsPerSold: round(logisticsPerSold, 0),
-    storagePerSold: round(storage, 0),
+    logisticsSource,
+    logisticsDetail: inputs.fact?.logisticsPerSold == null ? inputs.logistics?.detail ?? null : null,
+    storagePerSold: round(storagePerSold, 0),
+    storageSource,
+    storageDetail: inputs.fact?.storagePerSold == null ? inputs.storage?.detail ?? null : null,
+    liters: inputs.liters ?? null,
+    missing,
+    complete: missing.length === 0,
     pctShare,
     fixedPerUnit: fixed,
-    profitPerUnit: hasCost && profit != null ? round(profit, 0) : null,
-    marginPct: hasCost && price ? round((profit / price) * 100, 1) : null,
-    breakEvenPrice: hasCost ? round(fixed / (1 - pctShare), 0) : null,
-    maxAdPerSale: hasCost && profit != null ? round(Math.max(0, profit), 0) : null,
-    workAdPerSale: hasCost && profit != null ? round(Math.max(0, profit - settings.targetProfitPerUnit), 0) : null,
-    source: actual ? 'finance' : 'settings',
+    profitPerUnit: profit != null ? round(profit, 0) : null,
+    marginPct: profit != null && price ? round((profit / price) * 100, 1) : null,
+    breakEvenPrice: canProfit && pctShare < 1 ? round(fixed / (1 - pctShare), 0) : null,
+    maxAdPerSale: profit != null ? round(Math.max(0, profit), 0) : null,
+    workAdPerSale: profit != null ? round(Math.max(0, profit - settings.targetProfitPerUnit), 0) : null,
+    source: inputs.fact ? 'finance' : 'tariffs',
+  };
+}
+
+/** Все реальные вводные для юнит-экономики товара: тарифы, объём, склады, факт из финотчёта, выкуп. */
+export function costInputs(db, nmId, today = todayMsk()) {
+  const p = db.prepare('SELECT length_cm, width_cm, height_cm FROM products WHERE nm_id = ?').get(nmId) || {};
+  const liters = p.length_cm && p.width_cm && p.height_cm ? (p.length_cm * p.width_cm * p.height_cm) / 1000 : null;
+  const fact = actualCosts(db, nmId, today);
+
+  const tariff = tariffFor(db, nmId);
+  const commission = fact?.commissionPct != null
+    ? { pct: fact.commissionPct, source: 'финотчёт WB за 30 дней' }
+    : tariff?.pct != null ? { pct: tariff.pct, source: `тариф WB для предмета «${tariff.subjectName}» (FBW)` } : null;
+  const acquiring = fact?.acquiringPct != null ? { pct: fact.acquiringPct, source: 'финотчёт WB за 30 дней' } : null;
+
+  // Склады, где лежит товар, и их тарифы (доля склада — по остатку)
+  const wh = db
+    .prepare(`SELECT s.warehouse, s.qty, t.delivery_base, t.delivery_liter, t.storage_base, t.storage_liter, t.tariff_date
+      FROM stock_wh s JOIN box_tariffs t ON t.warehouse = s.warehouse WHERE s.nm_id = ? AND s.qty > 0`)
+    .all(nmId);
+  const totalQty = wh.reduce((n, w) => n + w.qty, 0);
+  const weighted = (fn) => (totalQty ? wh.reduce((n, w) => n + fn(w) * w.qty, 0) / totalQty : null);
+  const whText = wh.map((w) => `${w.warehouse} (${w.qty} шт.)`).join(', ');
+  const tariffDate = wh[0]?.tariff_date || null;
+
+  let logistics = null;
+  let storage = null;
+  if (liters == null) {
+    logistics = { why: 'логистика: нет размеров упаковки в карточке WB (нужна категория токена «Контент»)' };
+    storage = { why: 'хранение: нет размеров упаковки в карточке WB (нужна категория токена «Контент»)' };
+  } else if (!wh.length) {
+    logistics = { why: 'логистика: неизвестно, на каких складах WB лежит товар, или нет тарифов этих складов' };
+    storage = { why: 'хранение: неизвестно, на каких складах WB лежит товар, или нет тарифов этих складов' };
+  } else {
+    const perDelivery = weighted((w) => boxTariff(w.delivery_base, w.delivery_liter, liters) ?? 0);
+    const perDay = weighted((w) => boxTariff(w.storage_base, w.storage_liter, liters) ?? 0);
+    logistics = {
+      perDelivery,
+      source: `тариф WB для коробов на ${tariffDate}`,
+      detail: `объём ${String(round(liters, 3)).replace('.', ',')} л; склады: ${whText}; за доставку ${String(round(perDelivery, 2)).replace('.', ',')} ₽`,
+    };
+    // Сколько дней штука лежит до продажи: остаток ÷ продажи в день (заказы за 14 дней × выкуп)
+    const m = periodMetrics(db, nmId, addDays(today, -13), today);
+    const snap = latestSnapshot(db, nmId);
+    const buyout = m.buyoutPct != null ? m.buyoutPct / 100 : 1;
+    const salesPerDay = (m.orders / 14) * buyout;
+    const days = snap.stocks_wb != null && salesPerDay > 0 ? snap.stocks_wb / salesPerDay : null;
+    storage = {
+      perDay,
+      days: days != null ? Math.min(days, 365) : null,
+      source: `тариф WB для коробов на ${tariffDate} × дней до продажи`,
+      detail: `${String(round(perDay, 3)).replace('.', ',')} ₽ в день × ${days != null ? `${Math.round(Math.min(days, 365))} дн. (остаток ${snap.stocks_wb} шт. ÷ ${String(round(salesPerDay, 2)).replace('.', ',')} продаж в день)` : '— дн.'}`,
+      why: days == null ? 'хранение на штуку: нет продаж за 14 дней — не из чего посчитать, сколько дней товар пролежит' : undefined,
+    };
+  }
+  const m30 = periodMetrics(db, nmId, addDays(today, -29), today);
+  return {
+    liters: liters != null ? round(liters, 3) : null,
+    commission,
+    acquiring,
+    logistics,
+    storage,
+    fact: fact ? { logisticsPerSold: fact.logisticsPerSold, storagePerSold: fact.storagePerSold } : null,
+    buyoutPct: m30.buyoutPct ?? null,
+    buyoutSource: m30.buyoutPct != null ? 'аналитика WB за 30 дней' : null,
   };
 }
 
@@ -60,7 +175,9 @@ export function actualCosts(db, nmId, today = todayMsk()) {
         SUM(CASE WHEN oper_name LIKE 'Возврат%' THEN quantity ELSE 0 END) AS returned,
         AVG(CASE WHEN oper_name LIKE 'Продажа%' AND commission_pct > 0 THEN commission_pct END) AS commission,
         SUM(delivery) AS delivery, SUM(storage) AS storage, SUM(acceptance) AS acceptance,
-        SUM(penalty) AS penalty, SUM(deduction) AS deduction
+        SUM(penalty) AS penalty, SUM(deduction) AS deduction,
+        SUM(CASE WHEN oper_name LIKE 'Продажа%' THEN acquiring ELSE 0 END) AS acquiring,
+        SUM(CASE WHEN oper_name LIKE 'Продажа%' THEN retail_price_disc ELSE 0 END) AS saleSum
       FROM finance_lines WHERE nm_id = ? AND date >= ?`)
     .get(nmId, from);
   const net = (r?.sold || 0) - (r?.returned || 0);
@@ -70,6 +187,7 @@ export function actualCosts(db, nmId, today = todayMsk()) {
     commissionPct: r.commission ?? null,
     logisticsPerSold: (r.delivery || 0) / net,
     storagePerSold: ((r.storage || 0) + (r.acceptance || 0)) / net,
+    acquiringPct: r.saleSum > 0 && r.acquiring > 0 ? (r.acquiring / r.saleSum) * 100 : null,
     penalties: (r.penalty || 0) + (r.deduction || 0),
   };
 }
@@ -183,13 +301,14 @@ export function productSummary(db, p, settings, today = todayMsk()) {
   const fb = feedbackStats(db, p.nm_id, today);
   const actual = actualCosts(db, p.nm_id, today);
   const price = snap.seller_price ?? null;
-  const cost = p.cost_per_unit ?? (settings.defaultCostPerUnit || null);
-  const unit = unitEconomics({ price, cost, settings, actual: actual ? { ...actual, buyoutPct: cur.buyoutPct ?? undefined } : null, tariff: tariffFor(db, p.nm_id) });
+  const cost = p.cost_per_unit ?? null;
+  const unit = unitEconomics({ price, cost, settings, inputs: costInputs(db, p.nm_id, today) });
   const ordersPerDay = last14.orders / 14;
   const stockDays = snap.stocks_wb != null && ordersPerDay > 0 ? snap.stocks_wb / ordersPerDay : null;
   // Ожидаемая прибыль за 7 дней: заказы × доля выкупа × прибыль с продажи − реклама.
   // Не по выкупам: WB засчитывает выкуп через несколько дней после заказа, и свежие заказы давали бы «минус весь расход».
-  const profit = unit.profitPerUnit != null ? round(cur.orders * ((unit.buyoutPct ?? settings.defaultBuyoutPct) / 100) * unit.profitPerUnit - (cur.ads.spend || 0), 0) : null;
+  // Выкуп неизвестен — считаем, что выкупают всё, и это видно в «missing»
+  const profit = unit.profitPerUnit != null ? round(cur.orders * ((unit.buyoutPct ?? 100) / 100) * unit.profitPerUnit - (cur.ads.spend || 0), 0) : null;
   const alerts = buildAlerts({ cur, prev, snap, stockDays, fb, unit, settings });
   const spark = db
     .prepare('SELECT date, order_count FROM funnel_daily WHERE nm_id = ? AND date BETWEEN ? AND ? ORDER BY date')
@@ -291,11 +410,13 @@ export function baselineFor(db, nmId, settings, today = todayMsk()) {
     adSpendPerDay: round(m.ads.spend / 14, 0),
     cartConv: enough ? m.cart / m.open : 0.12,
     orderConv: enough && m.cart ? m.orders / m.cart : 0.5,
-    buyoutPct: (m.buyoutPct ?? settings.defaultBuyoutPct) / 100,
+    buyoutPct: m.buyoutPct != null ? m.buyoutPct / 100 : 1,
+    buyoutKnown: m.buyoutPct != null,
     price: snap.seller_price ?? null,
-    cost: product?.cost_per_unit ?? (settings.defaultCostPerUnit || null),
+    cost: product?.cost_per_unit ?? null,
     actual,
     tariff,
+    costInputs: costInputs(db, nmId, today),
     ordersPerDay: round(m.orders / 14, 2),
   };
 }

@@ -3,6 +3,7 @@
 
 export const WB_HOSTS = {
   analytics: 'https://seller-analytics-api.wildberries.ru',
+  content: 'https://content-api.wildberries.ru', // карточки: размеры упаковки (категория токена «Контент»)
   advert: 'https://advert-api.wildberries.ru', // статистика кампаний — 3 запроса в минуту
   advertInfo: 'https://advert-api.wildberries.ru', // список кампаний, бюджеты, дневные лимиты — 5 запросов в секунду
   advertRec: 'https://advert-api.wildberries.ru', // рекомендуемые ставки — 5 запросов в минуту
@@ -15,6 +16,7 @@ export const WB_HOSTS = {
 // Минимальный интервал между запросами к одному сервису (мс), с запасом к лимитам WB
 const MIN_INTERVAL_MS = {
   analytics: 21_000, // 3 запроса в минуту
+  content: 700,
   advert: 21_000, // 3 запроса в минуту
   advertInfo: 400,
   advertRec: 13_000,

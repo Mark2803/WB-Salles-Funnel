@@ -63,6 +63,21 @@ export function createMockClient({ nmIds, today = todayMsk() }) {
       if (path === '/api/advert/v0/bids/recommendations') {
         return [{ advertId: 900001, nmId: Number(query.nmId), paymentType: 'cpc', base: { competitiveBid: { bidKopecks: 1200 }, leadersBid: { bidKopecks: 2500 }, top2: { bidKopecks: 4000 } } }];
       }
+      if (path === '/api/v1/tariffs/box') {
+        return { response: { data: { dtNextBox: '', dtTillMax: '2026-12-31', warehouseList: [
+          { warehouseName: 'Коледино', geoName: 'Центральный', boxDeliveryBase: '46', boxDeliveryLiter: '14', boxDeliveryCoefExpr: '100', boxStorageBase: '0,08', boxStorageLiter: '0,08', boxStorageCoefExpr: '100' },
+          { warehouseName: 'Электросталь', geoName: 'Центральный', boxDeliveryBase: '50,6', boxDeliveryLiter: '15,4', boxDeliveryCoefExpr: '110', boxStorageBase: '0,09', boxStorageLiter: '0,09', boxStorageCoefExpr: '110' },
+        ] } } };
+      }
+      if (path === '/api/v1/warehouse_remains') return { data: { taskId: 'mock-remains' } };
+      if (path === '/api/v1/warehouse_remains/tasks/mock-remains/status') return { data: { id: 'mock-remains', status: 'done' } };
+      if (path === '/api/v1/warehouse_remains/tasks/mock-remains/download') {
+        return tracked.map((nmId, i) => ({ nmId, warehouses: [
+          { warehouseName: 'Коледино', quantity: 20 + i * 5 },
+          { warehouseName: 'Электросталь', quantity: 10 },
+          { warehouseName: 'В пути до получателей', quantity: 3 },
+        ] }));
+      }
       if (path === '/api/v1/tariffs/commission') {
         return { report: [{ subjectID: 406, subjectName: 'Чай', parentName: 'Продукты', paidStorageKgvp: 19.5, kgvpMarketplace: 21.5 }] };
       }
@@ -90,6 +105,10 @@ export function createMockClient({ nmIds, today = todayMsk() }) {
       throw new Error(`Тестовый режим: нет ответа для GET ${path}`);
     },
     async post(service, path, body = {}) {
+      if (path === '/content/v2/get/cards/list') {
+        // Размеры упаковки, см: пакет чая примерно 18 × 12 × 4
+        return { cards: tracked.map((nmID) => ({ nmID, dimensions: { length: 18, width: 12, height: 4, weightBrutto: 0.12, isValid: true } })), cursor: { total: tracked.length } };
+      }
       if (path === '/api/advert/v2/budget') {
         return { adverts: (body.advertIds || []).map((advertId) => ({ advertId, currency: 'RUB', total: 2500 })) };
       }

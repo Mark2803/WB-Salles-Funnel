@@ -72,6 +72,6 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   if (!neg.length) lines.push('- нет');
   for (const f of neg) lines.push(`- ${String(f.created_at).slice(0, 10)} ${f.nm_id}, ${f.rating}★: ${(f.text || f.cons || '').slice(0, 200)}`);
   lines.push('');
-  lines.push(`Настройки: цель ДРР ${settings.targetDrrPct}%, желаемая прибыль после рекламы ${settings.targetProfitPerUnit} ₽/шт., налог ${settings.taxPct}%.`);
+  lines.push(`Настройки: цель ДРР ${settings.targetDrrPct}%, желаемая прибыль после рекламы ${settings.targetProfitPerUnit} ₽/шт., налог ${settings.taxPct != null ? `${settings.taxPct}%` : 'не задан'}.`);
   return lines.join('\n');
 }

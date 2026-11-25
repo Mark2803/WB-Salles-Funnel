@@ -63,21 +63,43 @@ test('даты', () => {
   assert.deepEqual(dateRange('2026-11-29', '2026-12-01'), ['2026-11-29', '2026-11-30', '2026-12-01']);
 });
 
-test('юнит-экономика совпадает с калькулятором (цена 590, себестоимость 195)', () => {
-  const u = unitEconomics({ price: 590, cost: 195, settings: { ...DEFAULT_SETTINGS } });
-  // Как в таблице-калькуляторе: прибыль ~192,5 ₽, безубыточность ~333 ₽
-  assert.equal(u.profitPerUnit, 193);
-  assert.equal(u.breakEvenPrice, 333);
-  assert.equal(u.workAdPerSale, 113);
-  const noCost = unitEconomics({ price: 590, cost: null, settings: DEFAULT_SETTINGS });
-  assert.equal(noCost.profitPerUnit, null);
+test('юнит-экономика только по реальным данным: тарифы, объём, выкуп; чего нет — в списке', () => {
+  // Тариф короба: 46 ₽ первый литр + 14 ₽ за доп. литр; пакет 0,864 л → 46 ₽ за доставку; выкуп 90% → 51,1 ₽ на проданную штуку
+  const inputs = {
+    commission: { pct: 29.5, source: 'тариф' },
+    logistics: { perDelivery: 46, source: 'тариф WB' },
+    storage: { perDay: 0.08, days: 100, source: 'тариф WB' },
+    buyoutPct: 90,
+  };
+  const u = unitEconomics({ price: 1264, cost: 189, settings: { ...DEFAULT_SETTINGS, taxPct: 6 }, inputs });
+  // 1264 × (1 − 0,295 − 0,06) − (189 + 51,1 + 8) = 815,3 − 248,1 = 567
+  assert.equal(u.profitPerUnit, 567);
+  assert.deepEqual(u.missing, ['эквайринг (появится из финотчёта WB после первых продаж)', 'обратная логистика невыкупов (тарифа нет в API WB — появится из финотчёта)']);
+  assert.equal(u.complete, false);
+  // Налог не задан — так и пишем, не подставляем 6%
+  const noTax = unitEconomics({ price: 1264, cost: 189, settings: DEFAULT_SETTINGS, inputs });
+  assert.ok(noTax.missing.some((m) => m.startsWith('налог')));
+  // Нет себестоимости или комиссии — прибыль не считается
+  assert.equal(unitEconomics({ price: 590, cost: null, settings: DEFAULT_SETTINGS, inputs }).profitPerUnit, null);
+  assert.equal(unitEconomics({ price: 590, cost: 195, settings: DEFAULT_SETTINGS, inputs: { ...inputs, commission: null } }).profitPerUnit, null);
 });
 
 test('юнит-экономика по фактам финотчёта', () => {
-  const u = unitEconomics({ price: 1000, cost: 300, settings: DEFAULT_SETTINGS, actual: { commissionPct: 20, logisticsPerSold: 80, storagePerSold: 10 } });
+  const u = unitEconomics({
+    price: 1000, cost: 300, settings: { ...DEFAULT_SETTINGS, taxPct: 6 },
+    inputs: { commission: { pct: 20, source: 'финотчёт' }, acquiring: { pct: 2, source: 'финотчёт' }, fact: { logisticsPerSold: 80, storagePerSold: 10 }, buyoutPct: 95 },
+  });
   // 1000 × (1 − 0,20 − 0,02 − 0,06) − (300 + 80 + 10) = 720 − 390 = 330
   assert.equal(u.profitPerUnit, 330);
   assert.equal(u.source, 'finance');
+  assert.equal(u.complete, true);
+});
+
+test('тариф короба по формуле WB: первый литр + доп. литры', async () => {
+  const { boxTariff } = await import('../src/metrics.mjs');
+  assert.equal(boxTariff(46, 14, 0.864), 46);
+  assert.equal(boxTariff(46, 14, 3), 74);
+  assert.equal(boxTariff(46, 14, null), null);
 });
 
 test('разбор воронки по дням (формат API v3)', () => {
@@ -148,7 +170,10 @@ test('разбор цен, отзывов, финотчёта, поиска', ()
   assert.equal(s.openCard, 6);
 });
 
-const baseline = { nmId: 1, enoughData: true, organicOpensPerDay: 50, adClicksPerDay: 0, adSpendPerDay: 0, cartConv: 0.12, orderConv: 0.5, buyoutPct: 0.95, price: 590, cost: 195, actual: null };
+const baseline = {
+  nmId: 1, enoughData: true, organicOpensPerDay: 50, adClicksPerDay: 0, adSpendPerDay: 0, cartConv: 0.12, orderConv: 0.5, buyoutPct: 0.95, price: 590, cost: 195, actual: null,
+  costInputs: { commission: { pct: 25, source: 'тариф' }, logistics: { perDelivery: 46, source: 'тариф' }, storage: { perDay: 0.08, days: 60, source: 'тариф' }, buyoutPct: 95 },
+};
 
 test('симулятор: без стратегии сценарии совпадают, со стратегией заказы растут', () => {
   const r = simulate({ baseline, settings: DEFAULT_SETTINGS, strategyKey: 'ads_cpc', params: { dailyBudget: 400, cpc: 8 }, days: 30, startDate: '2026-12-01' });

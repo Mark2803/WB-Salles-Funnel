@@ -358,7 +358,7 @@ export async function collectAds(client, db, nmIds, today = todayMsk()) {
   return { campaigns: live.length, finished: recentFinished.length, rows: saved, extraNmIds, ...(warnings.length ? { warnings } : {}) };
 }
 
-// ---------- Комиссии WB по предметам (тарифы) ----------
+// ---------- Тарифы WB: комиссия по предметам и коробы по складам (с историей изменений) ----------
 export function parseCommission(resp) {
   return (resp?.report || [])
     .filter((r) => r?.subjectID)
@@ -371,16 +371,162 @@ export function parseCommission(resp) {
     }));
 }
 
-/** Комиссия WB по предметам (официальные тарифы, раз в сутки). Нужна для юнит-экономики, пока нет финотчёта. */
-export async function collectTariffs(client, db) {
+// В тарифах WB числа приходят строками с запятой («46,5») или «-», если тарифа нет
+const tariffNum = (v) => {
+  if (v == null || v === '' || v === '-') return null;
+  const x = Number(String(v).replace(/\s/g, '').replace(',', '.'));
+  return Number.isFinite(x) ? x : null;
+};
+
+export function parseBoxTariffs(resp) {
+  const data = resp?.response?.data || resp?.data || {};
+  return {
+    nextDate: data.dtNextBox || null,
+    warehouses: (data.warehouseList || [])
+      .filter((w) => w?.warehouseName)
+      .map((w) => ({
+        warehouse: w.warehouseName,
+        geo: w.geoName || null,
+        deliveryBase: tariffNum(w.boxDeliveryBase),
+        deliveryLiter: tariffNum(w.boxDeliveryLiter),
+        deliveryCoef: tariffNum(w.boxDeliveryCoefExpr),
+        storageBase: tariffNum(w.boxStorageBase),
+        storageLiter: tariffNum(w.boxStorageLiter),
+        storageCoef: tariffNum(w.boxStorageCoefExpr),
+      })),
+  };
+}
+
+const BOX_FIELDS = {
+  deliveryBase: ['delivery_base', 'логистика, первый литр'],
+  deliveryLiter: ['delivery_liter', 'логистика, доп. литр'],
+  storageBase: ['storage_base', 'хранение в день, первый литр'],
+  storageLiter: ['storage_liter', 'хранение в день, доп. литр'],
+};
+
+/**
+ * Официальные тарифы WB раз в сутки: комиссия по предметам (FBW) и коробы по складам (логистика и хранение за литр).
+ * Каждое изменение по складам, где лежат ваши товары, и по предметам ваших товаров пишется в историю и журнал.
+ */
+export async function collectTariffs(client, db, nmIds, today = todayMsk()) {
+  const changes = [];
+  const note = db.prepare('INSERT INTO tariff_changes(changed_at, kind, item, field, old_value, new_value) VALUES (?,?,?,?,?,?)');
+  const journal = db.prepare("INSERT INTO journal(date, nm_id, kind, text, created_at) VALUES (?, NULL, 'tariff', ?, ?)");
+  const fmt = (v) => (v == null ? '—' : String(v).replace('.', ','));
+
+  // Комиссия
   const list = parseCommission(await client.get('common', '/api/v1/tariffs/commission', { locale: 'ru' }));
+  const usedSubjects = new Set(db.prepare('SELECT DISTINCT subject_id FROM products WHERE subject_id IS NOT NULL').all().map((r) => r.subject_id));
   transaction(db, () => {
+    const old = db.prepare('SELECT fbw_pct FROM subject_tariffs WHERE subject_id = ?');
     const up = db.prepare(`INSERT INTO subject_tariffs(subject_id, subject_name, parent_name, fbw_pct, fbs_pct, updated_at) VALUES (?,?,?,?,?,?)
       ON CONFLICT(subject_id) DO UPDATE SET subject_name=excluded.subject_name, parent_name=excluded.parent_name, fbw_pct=excluded.fbw_pct, fbs_pct=excluded.fbs_pct, updated_at=excluded.updated_at`);
-    for (const t of list) up.run(t.subjectId, t.subjectName, t.parentName, t.fbwPct, t.fbsPct, nowIso());
+    for (const t of list) {
+      const prev = old.get(t.subjectId);
+      if (prev && prev.fbw_pct != null && t.fbwPct != null && Math.abs(prev.fbw_pct - t.fbwPct) > 0.001 && usedSubjects.has(t.subjectId)) {
+        note.run(nowIso(), 'commission', t.subjectName || String(t.subjectId), 'комиссия FBW, %', prev.fbw_pct, t.fbwPct);
+        const text = `WB изменил комиссию для «${t.subjectName}» (FBW): ${fmt(prev.fbw_pct)}% → ${fmt(t.fbwPct)}%`;
+        journal.run(today, text, nowIso());
+        changes.push(text);
+      }
+      up.run(t.subjectId, t.subjectName, t.parentName, t.fbwPct, t.fbsPct, nowIso());
+    }
   });
-  const used = db.prepare('SELECT DISTINCT p.subject_name, t.fbw_pct FROM products p JOIN subject_tariffs t ON t.subject_id = p.subject_id WHERE p.active = 1').all();
-  return { subjects: list.length, used: used.map((u) => `${u.subject_name}: ${u.fbw_pct}%`) };
+
+  // Коробы по складам: логистика и хранение
+  const box = parseBoxTariffs(await client.get('common', '/api/v1/tariffs/box', { date: today }));
+  const ourWarehouses = new Set(db.prepare('SELECT DISTINCT warehouse FROM stock_wh WHERE qty > 0').all().map((r) => r.warehouse));
+  transaction(db, () => {
+    const old = db.prepare('SELECT * FROM box_tariffs WHERE warehouse = ?');
+    const up = db.prepare(`INSERT INTO box_tariffs(warehouse, geo, delivery_base, delivery_liter, delivery_coef, storage_base, storage_liter, storage_coef, tariff_date, next_date, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(warehouse) DO UPDATE SET geo=excluded.geo, delivery_base=excluded.delivery_base, delivery_liter=excluded.delivery_liter, delivery_coef=excluded.delivery_coef,
+        storage_base=excluded.storage_base, storage_liter=excluded.storage_liter, storage_coef=excluded.storage_coef, tariff_date=excluded.tariff_date,
+        next_date=excluded.next_date, updated_at=excluded.updated_at`);
+    for (const w of box.warehouses) {
+      const prev = old.get(w.warehouse);
+      if (prev) {
+        for (const [key, [col, label]] of Object.entries(BOX_FIELDS)) {
+          const a = prev[col];
+          const b = w[key];
+          if (a != null && b != null && Math.abs(a - b) > 0.0001) {
+            note.run(nowIso(), 'box', w.warehouse, label, a, b);
+            if (ourWarehouses.has(w.warehouse)) {
+              const text = `WB изменил тариф склада ${w.warehouse} (${label}): ${fmt(a)} → ${fmt(b)} ₽`;
+              journal.run(today, text, nowIso());
+              changes.push(text);
+            }
+          }
+        }
+      }
+      up.run(w.warehouse, w.geo, w.deliveryBase, w.deliveryLiter, w.deliveryCoef, w.storageBase, w.storageLiter, w.storageCoef, today, box.nextDate, nowIso());
+    }
+  });
+  return { subjects: list.length, warehouses: box.warehouses.length, nextTariffDate: box.nextDate, changes: changes.length, ...(changes.length ? { list: changes } : {}) };
+}
+
+// ---------- Размеры упаковки из карточек WB (категория токена «Контент») ----------
+export function parseCardDimensions(cards) {
+  return (cards || [])
+    .filter((c) => c?.nmID && c.dimensions)
+    .map((c) => ({
+      nmId: c.nmID,
+      length: num(c.dimensions.length) || null,
+      width: num(c.dimensions.width) || null,
+      height: num(c.dimensions.height) || null,
+      weight: c.dimensions.weightBrutto == null ? null : num(c.dimensions.weightBrutto),
+    }));
+}
+
+export async function collectDimensions(client, db, nmIds) {
+  const want = new Set(nmIds);
+  const found = [];
+  let cursor = { limit: 100 };
+  for (let page = 0; page < 100; page++) {
+    const data = await client.post('content', '/content/v2/get/cards/list', { settings: { sort: { ascending: true }, cursor, filter: { withPhoto: -1 } } });
+    const cards = data?.cards || [];
+    for (const d of parseCardDimensions(cards)) if (want.has(d.nmId)) found.push(d);
+    if (cards.length < 100 || !data?.cursor?.nmID) break;
+    cursor = { limit: 100, updatedAt: data.cursor.updatedAt, nmID: data.cursor.nmID };
+  }
+  transaction(db, () => {
+    const up = db.prepare('UPDATE products SET length_cm = ?, width_cm = ?, height_cm = ?, weight_kg = ?, dims_updated_at = ? WHERE nm_id = ?');
+    for (const d of found) up.run(d.length, d.width, d.height, d.weight, nowIso(), d.nmId);
+  });
+  const missing = [...want].filter((id) => !found.some((d) => d.nmId === id && d.length && d.width && d.height));
+  return { products: found.length, ...(missing.length ? { noDimensions: missing } : {}) };
+}
+
+// ---------- Остатки по складам WB (для тарифа склада, где лежит товар) ----------
+export async function collectStocksByWarehouse(client, db, nmIds, today = todayMsk()) {
+  const created = await client.get('analytics', '/api/v1/warehouse_remains', { groupByNm: true });
+  const taskId = created?.data?.taskId;
+  if (!taskId) throw new Error('WB не вернул номер задания на отчёт об остатках');
+  let status = 'new';
+  for (let i = 0; i < 12 && status !== 'done'; i++) {
+    const st = await client.get('analytics', `/api/v1/warehouse_remains/tasks/${taskId}/status`);
+    status = st?.data?.status || 'new';
+    if (status === 'canceled' || status === 'purged') throw new Error(`отчёт об остатках: ${status}`);
+  }
+  if (status !== 'done') throw new Error('отчёт об остатках не успел сформироваться — попробую при следующем сборе');
+  const items = (await client.get('analytics', `/api/v1/warehouse_remains/tasks/${taskId}/download`)) || [];
+  const want = new Set(nmIds);
+  const SKIP = new Set(['В пути до получателей', 'В пути возвраты на склад WB', 'Всего находится на складах']);
+  let rows = 0;
+  transaction(db, () => {
+    const del = db.prepare('DELETE FROM stock_wh WHERE nm_id = ?');
+    const ins = db.prepare('INSERT INTO stock_wh(nm_id, warehouse, qty, date) VALUES (?,?,?,?) ON CONFLICT(nm_id, warehouse) DO UPDATE SET qty = qty + excluded.qty, date = excluded.date');
+    for (const id of want) del.run(id);
+    for (const it of Array.isArray(items) ? items : []) {
+      if (!want.has(it.nmId)) continue;
+      for (const w of it.warehouses || []) {
+        if (!w.warehouseName || SKIP.has(w.warehouseName) || !(num(w.quantity) > 0)) continue;
+        ins.run(it.nmId, w.warehouseName, num(w.quantity), today);
+        rows++;
+      }
+    }
+  });
+  return { rows };
 }
 
 // ---------- Поисковые запросы и позиции (только с подпиской «Джем») ----------
