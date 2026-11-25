@@ -186,7 +186,9 @@ export function productSummary(db, p, settings, today = todayMsk()) {
   const unit = unitEconomics({ price, cost, settings, actual: actual ? { ...actual, buyoutPct: cur.buyoutPct ?? undefined } : null, tariff: tariffFor(db, p.nm_id) });
   const ordersPerDay = last14.orders / 14;
   const stockDays = snap.stocks_wb != null && ordersPerDay > 0 ? snap.stocks_wb / ordersPerDay : null;
-  const profit = unit.profitPerUnit != null ? round(cur.buyouts * unit.profitPerUnit - (cur.ads.spend || 0), 0) : null;
+  // Ожидаемая прибыль за 7 дней: заказы × доля выкупа × прибыль с продажи − реклама.
+  // Не по выкупам: WB засчитывает выкуп через несколько дней после заказа, и свежие заказы давали бы «минус весь расход».
+  const profit = unit.profitPerUnit != null ? round(cur.orders * ((unit.buyoutPct ?? settings.defaultBuyoutPct) / 100) * unit.profitPerUnit - (cur.ads.spend || 0), 0) : null;
   const alerts = buildAlerts({ cur, prev, snap, stockDays, fb, unit, settings });
   const spark = db
     .prepare('SELECT date, order_count FROM funnel_daily WHERE nm_id = ? AND date BETWEEN ? AND ? ORDER BY date')

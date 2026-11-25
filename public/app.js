@@ -174,7 +174,7 @@
         <div class="kpi"><div class="label">Заказы, шт.</div><div class="value">${n(cur.orders)}</div><div class="delta">${delta(ch(cur.orders, prev.orders))}</div></div>
         <div class="kpi"><div class="label">Заказы, ₽</div><div class="value">${rub(cur.orderSum)}</div><div class="delta">${delta(ch(cur.orderSum, prev.orderSum))}</div></div>
         <div class="kpi"><div class="label">Реклама, ₽</div><div class="value">${rub(cur.spend)}</div><div class="delta muted">ДРР ${pct(drr)}</div></div>
-        <div class="kpi"><div class="label">Прибыль после рекламы</div><div class="value">${profit == null ? '—' : rub(profit)}</div><div class="delta muted">${noCost ? `нет себестоимости у ${noCost} арт.` : 'по всем артикулам'}</div></div>
+        <div class="kpi"><div class="label">Ожидаемая прибыль после рекламы</div><div class="value">${profit == null ? '—' : rub(profit)}</div><div class="delta muted">${noCost ? `нет себестоимости у ${noCost} арт.` : 'по всем артикулам'}</div></div>
       </div>
       <div class="panel">
         <h2>Что требует внимания</h2>
@@ -185,7 +185,7 @@
         <div class="table-wrap"><table class="data">
           <thead><tr>
             <th></th><th>Товар</th><th class="num">Цена</th><th class="num">Остаток</th><th class="num">Переходы</th><th class="num">→ корзина</th><th class="num">→ заказ</th>
-            <th class="num">Заказы</th><th>14 дней</th><th class="num">ДРР</th><th class="num">Прибыль 7 дн.</th><th class="num">Рейтинг</th><th>Стратегия</th>
+            <th class="num">Заказы</th><th>14 дней</th><th class="num">ДРР</th><th class="num" title="Ожидаемая: заказы × доля выкупа × прибыль с продажи − реклама">Прибыль 7 дн. (ожид.)</th><th class="num">Рейтинг</th><th>Стратегия</th>
           </tr></thead>
           <tbody>${ps
             .map(
