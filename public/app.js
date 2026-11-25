@@ -104,10 +104,19 @@
   }
 
   // ---------- Верхняя панель ----------
+  // Данные собираются сами по расписанию. Открытая страница раз в 2 минуты проверяет, не закончился ли новый сбор,
+  // и сама перерисовывается (если вы ничего не вводите).
+  let seenRunId = null;
   async function refreshSyncStatus() {
     try {
       const s = await api('sync');
       const last = s.runs[0];
+      const finished = s.runs.find((r) => r.finished_at);
+      if (finished && seenRunId !== null && finished.id !== seenRunId && !s.running) {
+        const typing = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+        if (!typing) route();
+      }
+      if (finished) seenRunId = finished.id;
       const el = document.getElementById('syncStatus');
       if (s.running) el.textContent = 'Идёт сбор данных…';
       else if (last) {
@@ -117,10 +126,15 @@
       } else el.textContent = 'Данных ещё нет';
       document.getElementById('btnSync').disabled = s.running;
       if (s.running) setTimeout(refreshSyncStatus, 8000);
+      document.getElementById('btnSync').title = `Данные обновляются сами: каждые ${s.everyHours ?? 1} ч и полный сбор раз в сутки. Кнопка — если нужно прямо сейчас (например, только что поменяли ставку в кабинете WB).`;
     } catch {
       /* нет доступа — покажется вход */
     }
   }
+
+  setInterval(() => {
+    if (document.visibilityState === 'visible') refreshSyncStatus();
+  }, 120_000);
 
   document.getElementById('btnSync').addEventListener('click', async () => {
     try {
@@ -199,7 +213,7 @@
     $app.innerHTML = `
       <h1>Сводка за 7 дней</h1>
       <p class="muted">По ${ps.length} артикулам · сравнение с предыдущими 7 днями · на ${esc(data.today)}</p>
-      ${hasData ? '' : '<div class="warn">Данных пока нет. Нажмите «Обновить данные» вверху — первый сбор займёт несколько минут.</div>'}
+      ${hasData ? '' : '<div class="warn">Данных пока нет. Первый сбор начнётся сам в течение 10 минут после запуска (или нажмите «Обновить сейчас» вверху) и займёт несколько минут.</div>'}
       <div class="kpis">
         <div class="kpi"><div class="label">Переходы в карточки</div><div class="value">${n(cur.open)}</div><div class="delta">${delta(ch(cur.open, prev.open))}</div></div>
         <div class="kpi"><div class="label">Заказы, шт.</div><div class="value">${n(cur.orders)}</div><div class="delta">${delta(ch(cur.orders, prev.orders))}</div></div>
@@ -625,7 +639,7 @@
     const items = focus ? [...d.items.filter((x) => x.campaign.advertId === focus), ...d.items.filter((x) => x.campaign.advertId !== focus)] : d.items;
     if (!items.length) {
       $app.innerHTML = `<h1>Реклама</h1><div class="panel"><p>Рекламных кампаний пока не видно.</p>
-        <p class="muted">Кампании подтягиваются из кабинета WB при каждом сборе данных (раз в 3 часа или по кнопке «Обновить данные»). Нужна категория токена «Продвижение».
+        <p class="muted">Кампании подтягиваются из кабинета WB при каждом сборе данных (сами, раз в час; «Обновить сейчас» — если нужно немедленно). Нужна категория токена «Продвижение».
         Товары с действующей рекламой отслеживаются автоматически, даже без галочки «Воронка WB».</p></div>`;
       return;
     }

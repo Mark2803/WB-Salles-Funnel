@@ -358,7 +358,7 @@ export function createApi({ db, cfg, log = console, verifyToken }) {
     return { started: true, kind };
   });
 
-  route('GET', '/api/sync', () => ({ runs: lastRuns(db, 10), running: isSyncRunning() }));
+  route('GET', '/api/sync', () => ({ runs: lastRuns(db, 10), running: isSyncRunning(), everyHours: cfg.syncEveryHours }));
 
   route('GET', '/api/export/claude', ({ res }) => {
     const md = buildClaudeSummary(db, getSettings(db));
