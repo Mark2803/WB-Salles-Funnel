@@ -150,3 +150,19 @@ table.data tr.current td { background: var(--accent-soft); }
 .form-row.calc { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin: 8px 0; }
 .form-row.calc input { width: 140px; }
 .ok-line { background: #e3f5ea; padding: 8px 10px; border-radius: 8px; }
+
+/* Подсказки к показателям: наведите мышку или нажмите */
+.term { position: relative; border-bottom: 1px dotted currentColor; cursor: help; }
+.term:hover::after, .term:focus::after {
+  content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20;
+  width: max-content; max-width: 320px; white-space: normal; text-align: left;
+  background: #2b2433; color: #fff; font-size: 12px; font-weight: 400; line-height: 1.4;
+  padding: 8px 10px; border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
+}
+th.num .term:hover::after, th.num .term:focus::after, td.num .term:hover::after { left: auto; right: 0; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 12px 0 6px; }
+.metric { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--panel); }
+.metric .label { font-size: 12px; color: var(--muted); }
+.metric .value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.metric.key { border-color: var(--accent); background: var(--accent-soft); }
+.glossary summary { cursor: pointer; }

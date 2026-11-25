@@ -3,6 +3,37 @@
   'use strict';
   const $app = document.getElementById('app');
   const C = window.Charts;
+
+  // Шпаргалка: что значит каждый показатель. Наведите мышку (или нажмите) на подчёркнутое слово.
+  const TERMS = {
+    'Показы': { text: 'Сколько раз карточку показали покупателям в рекламе (поиск или рекомендации).', act: 'Мало показов — ставка ниже конкурентов или узкие запросы.' },
+    'Клики': { text: 'Сколько раз покупатели нажали на рекламную карточку.', act: '' },
+    CTR: { text: 'Кликабельность: из 100 увидевших карточку сколько кликнули. CTR = клики ÷ показы × 100%. В поиске WB обычно 3–8%.', act: 'Низкий CTR — меняйте главное фото, название, цену. Ставка тут не поможет.' },
+    CPC: { text: 'Цена клика: сколько вы реально заплатили за один клик. CPC = затраты ÷ клики. На WB это обычно меньше ставки (аукцион второй цены).', act: 'Сравнивайте с безубыточной ставкой на этой же странице.' },
+    CPM: { text: 'Цена 1000 показов. CPM = затраты ÷ показы × 1000. Главное для кампаний с оплатой за показы; при оплате за клики — справочно.', act: '' },
+    'Корзины': { text: 'Сколько раз после клика по рекламе товар положили в корзину (включая другие ваши товары).', act: 'Кладут, но не заказывают — цена, срок доставки или отзывы.' },
+    'Заказы': { text: 'Заказы после клика по рекламе — как в отчёте WB, вместе с заказами других ваших товаров.', act: '' },
+    CR: { text: 'Конверсия: из 100 кликнувших сколько заказали. CR = заказы ÷ клики × 100%. Надёжна примерно после 100 кликов.', act: 'Низкий CR — дело в карточке: отзывы, рейтинг, описание, цена против конкурентов.' },
+    'Затраты': { text: 'Сколько списано за рекламу за период.', act: '' },
+    CPO: { text: 'Цена заказа: сколько рекламы ушло на один заказ. CPO = затраты ÷ заказы. Главный показатель.', act: 'CPO меньше прибыли с заказа — реклама в плюс; больше — в минус.' },
+    CPS: { text: 'Цена продажи (выкупа): затраты ÷ выкупы. Как CPO, но с учётом невыкупов. У чая выкуп ~95%, поэтому CPS ≈ CPO ÷ 0,95.', act: '' },
+    'Сумма заказов': { text: 'На сколько рублей заказали после клика по рекламе (в ценах покупателя).', act: '' },
+    'ДРР': { text: 'Доля рекламных расходов: реклама в процентах от суммы заказов. ДРР = затраты ÷ сумма заказов × 100%. В отчёте WB — «Доля затрат».', act: 'ДРР выше потолка (прибыль с заказа в % от цены) — реклама в минус.' },
+    ROAS: { text: 'Окупаемость рекламы: сколько рублей заказов на 1 рубль рекламы. ROAS = сумма заказов ÷ затраты = 100 ÷ ДРР.', act: 'То же, что ДРР, только наоборот: больше — лучше.' },
+    'Позиция': { text: 'Место карточки в выдаче по рекламным запросам. API WB для рекламы его не отдаёт — смотрите в кабинете.', act: '' },
+    'Ставка': { text: 'Сколько вы готовы платить за клик (или за 1000 показов). Списывается обычно меньше — по второй цене.', act: '' },
+    'Безубыточная ставка': { text: 'Ставка, при которой вся прибыль с заказа уходит в рекламу. Выше — каждый заказ в минус.', act: '' },
+    'Переходы': { text: 'Сколько раз открыли карточку товара (из поиска, каталога, рекламы).', act: '' },
+    '→ корзина': { text: 'Из открывших карточку — сколько положили в корзину, %.', act: '' },
+    '→ заказ': { text: 'Из положивших в корзину — сколько заказали, %.', act: '' },
+    'Выкуп': { text: 'Доля заказов, которые покупатели забрали и оплатили.', act: '' },
+  };
+  const term = (key, label = key) => {
+    const t = TERMS[key];
+    if (!t) return esc(label);
+    return `<span class="term" tabindex="0" data-tip="${esc(t.text + (t.act ? ` Что делать: ${t.act}` : ''))}">${esc(label)}</span>`;
+  };
+
   const COLORS = { open: '#2f6fd6', cart: '#d69a00', orders: '#7b2cbf', buyouts: '#2e9e5b', spend: '#d64545', grey: '#a8a4b0', plan: '#a8a4b0' };
   const state = { strategies: null, overview: null };
 
@@ -184,8 +215,8 @@
         <h2>Артикулы</h2>
         <div class="table-wrap"><table class="data">
           <thead><tr>
-            <th></th><th>Товар</th><th class="num">Цена</th><th class="num">Остаток</th><th class="num">Переходы</th><th class="num">→ корзина</th><th class="num">→ заказ</th>
-            <th class="num">Заказы</th><th>14 дней</th><th class="num">ДРР</th><th class="num" title="Ожидаемая: заказы × доля выкупа × прибыль с продажи − реклама">Прибыль 7 дн. (ожид.)</th><th class="num">Рейтинг</th><th>Стратегия</th>
+            <th></th><th>Товар</th><th class="num">Цена</th><th class="num">Остаток</th><th class="num">${term('Переходы')}</th><th class="num">${term('→ корзина')}</th><th class="num">${term('→ заказ')}</th>
+            <th class="num">Заказы</th><th>14 дней</th><th class="num">${term('ДРР')}</th><th class="num" title="Ожидаемая: заказы × доля выкупа × прибыль с продажи − реклама">Прибыль 7 дн. (ожид.)</th><th class="num">Рейтинг</th><th>Стратегия</th>
           </tr></thead>
           <tbody>${ps
             .map(
@@ -627,13 +658,13 @@
       const rec = it.recommended;
       return `
         <table class="data compact"><tbody>
-          <tr><td>Ставка в кабинете</td><td class="num">${r1(i.bid)} ${bidUnit(c)}</td></tr>
-          <tr><td>Цена клика <span class="small muted">(${esc(i.chargeSource)}${c.paymentType === 'cpm' ? `; CTR ${pct(i.ctr * 100, 2)} — ${esc(i.ctrSource)}` : ''})</span></td><td class="num">${r1(e.cpc, 2)} ₽</td></tr>
-          <tr><td>Конверсия клика в заказ <span class="small muted">(${esc(i.crSource)})</span></td><td class="num">${pct(e.cr, 2)}</td></tr>
-          <tr><td>Заказ с рекламы стоит <span class="small muted">(цена клика ÷ конверсия)</span></td><td class="num">${rub(e.costPerOrder)}</td></tr>
-          <tr><td>ДРР <span class="small muted">(цена клика ÷ (конверсия × цена))</span></td><td class="num"><b>${pct(e.drrPct)}</b> <span class="small muted">цель ${pct(d.targetDrrPct, 0)}</span></td></tr>
+          <tr><td>${term('Ставка', 'Ставка в кабинете')}</td><td class="num">${r1(i.bid)} ${bidUnit(c)}</td></tr>
+          <tr><td>${term('CPC', 'Цена клика (CPC)')} <span class="small muted">(${esc(i.chargeSource)}${c.paymentType === 'cpm' ? `; CTR ${pct(i.ctr * 100, 2)} — ${esc(i.ctrSource)}` : ''})</span></td><td class="num">${r1(e.cpc, 2)} ₽</td></tr>
+          <tr><td>${term('CR', 'Конверсия клика в заказ (CR)')} <span class="small muted">(${esc(i.crSource)})</span></td><td class="num">${pct(e.cr, 2)}</td></tr>
+          <tr><td>${term('CPO', 'Заказ с рекламы стоит (CPO)')} <span class="small muted">(цена клика ÷ конверсия)</span></td><td class="num">${rub(e.costPerOrder)}</td></tr>
+          <tr><td>${term('ДРР')} <span class="small muted">(цена клика ÷ (конверсия × цена))</span></td><td class="num"><b>${pct(e.drrPct)}</b> <span class="small muted">цель ${pct(d.targetDrrPct, 0)}</span></td></tr>
           <tr><td>Прибыль с заказа после рекламы</td><td class="num"><b class="${e.profitPerOrderAfterAds != null && e.profitPerOrderAfterAds < 0 ? 'bad' : ''}">${rub(e.profitPerOrderAfterAds)}</b> <span class="small muted">маржа ${pct(e.marginAfterAdsPct)}</span></td></tr>
-          <tr><td>Безубыточная ставка <span class="small muted">(выше — каждый заказ в минус)</span></td><td class="num">${r1(e.breakEvenBid)} ${bidUnit(c)}</td></tr>
+          <tr><td>${term('Безубыточная ставка')} <span class="small muted">(выше — каждый заказ в минус)</span></td><td class="num">${r1(e.breakEvenBid)} ${bidUnit(c)}</td></tr>
           <tr><td>Ставка под цель ДРР ${pct(d.targetDrrPct, 0)}</td><td class="num">${r1(e.targetBid)} ${bidUnit(c)}</td></tr>
           ${rec ? `<tr><td>Рекомендации WB <span class="small muted">(конкурентная / лидеры / топ-2)</span></td><td class="num">${r1(rec.competitive)} / ${r1(rec.leaders)} / ${r1(rec.top2)} ₽</td></tr>` : ''}
         </tbody></table>`;
@@ -651,7 +682,7 @@
       </tbody></table>`;
     };
 
-    const scenarioTable = (rows, c) => `<table class="data compact"><thead><tr><th class="num">Ставка</th><th class="num">Цена клика</th><th class="num">Клики/день</th><th class="num">Заказы/день</th><th class="num">Расход/день</th><th class="num">ДРР</th><th class="num">Прибыль с заказа</th><th class="num">Прибыль/день</th></tr></thead><tbody>
+    const scenarioTable = (rows, c) => `<table class="data compact"><thead><tr><th class="num">Ставка</th><th class="num">${term('CPC', 'Цена клика')}</th><th class="num">Клики/день</th><th class="num">Заказы/день</th><th class="num">Расход/день</th><th class="num">${term('ДРР')}</th><th class="num">Прибыль с заказа</th><th class="num">Прибыль/день</th></tr></thead><tbody>
       ${rows.map((s) => `<tr class="${s.current ? 'current' : ''}"><td class="num">${n(s.bid, 1)} ₽${s.current ? ' · сейчас' : ''}</td><td class="num">${n(s.cpc, 2)} ₽</td><td class="num">${n(s.perDay?.clicks, 1)}</td><td class="num">${n(s.perDay?.orders, 2)}</td><td class="num">${rub(s.perDay?.spend)}</td><td class="num ${s.drrPct != null && s.drrPct > d.targetDrrPct ? 'bad' : ''}">${pct(s.drrPct)}</td><td class="num ${s.profitPerOrderAfterAds != null && s.profitPerOrderAfterAds < 0 ? 'bad' : ''}">${rub(s.profitPerOrderAfterAds)}</td><td class="num">${rub(s.perDay?.profit)}</td></tr>`).join('')}
       </tbody></table><p class="small muted">Ставка — ${bidUnit(c)}. Клики при другой ставке — допущение: растут медленнее ставки (×2 ставка ≈ ×1,6 кликов) и не больше дневного бюджета. Конверсия и цена — как сейчас.</p>`;
 
@@ -676,12 +707,20 @@
               <div><span class="muted small">Остаток на WB</span><b>${n(it.product.stocks)}${it.product.stockDays != null ? ` · ~${it.product.stockDays} дн.` : ''}</b></div>
             </div>
           </div>
-          <div class="kpis">
-            <div class="kpi"><div class="label">Показы · CTR</div><div class="value">${n(f.views)}</div><div class="delta muted">CTR ${pct(f.ctr, 2)}</div></div>
-            <div class="kpi"><div class="label">Клики · цена клика</div><div class="value">${n(f.clicks)}</div><div class="delta muted">${f.cpc != null ? `${n(f.cpc, 2)} ₽ за клик` : '—'}</div></div>
-            <div class="kpi"><div class="label">Заказы с рекламы</div><div class="value">${n(f.orders)}</div><div class="delta muted">конверсия ${pct(f.cr, 2)} · корзина ${pct(f.cartRate)}${f.otherOrders ? `<br/>в т. ч. ${n(f.otherOrders)} — другие ваши товары (${rub(f.otherOrderSum)})` : ''}</div></div>
-            <div class="kpi"><div class="label">Расход</div><div class="value">${rub(f.spend)}</div><div class="delta muted">заказ ${rub(f.costPerOrder)}</div></div>
-            <div class="kpi"><div class="label">ДРР</div><div class="value">${pct(f.drrPct)}</div><div class="delta muted">в кабинете WB ${pct(f.drrWbPct)} (от цены покупателя)</div></div>
+          <div class="metrics">
+            <div class="metric"><div class="label">${term('Показы')}</div><div class="value">${n(f.views)}</div></div>
+            <div class="metric"><div class="label">${term('Клики')}</div><div class="value">${n(f.clicks)}</div></div>
+            <div class="metric"><div class="label">${term('CTR')}</div><div class="value">${pct(f.ctr, 2)}</div></div>
+            <div class="metric"><div class="label">${term('CPC')}</div><div class="value">${f.cpc != null ? `${n(f.cpc, 2)} ₽` : '—'}</div></div>
+            <div class="metric"><div class="label">${term('CPM')}</div><div class="value">${rub(f.cpm)}</div></div>
+            <div class="metric"><div class="label">${term('Корзины')}</div><div class="value">${n(f.atbs)}</div></div>
+            <div class="metric"><div class="label">${term('Заказы')}</div><div class="value">${n(f.orders)}</div>${f.otherOrders ? `<div class="small muted">в т. ч. ${n(f.otherOrders)} другие товары</div>` : ''}</div>
+            <div class="metric"><div class="label">${term('CR')}</div><div class="value">${pct(f.cr, 2)}</div></div>
+            <div class="metric"><div class="label">${term('Затраты')}</div><div class="value">${rub(f.spend)}</div></div>
+            <div class="metric key"><div class="label">${term('CPO')}</div><div class="value">${rub(f.costPerOrder)}</div><div class="small muted">прибыль с заказа ${rub(it.economics.profitPerOrder)}</div></div>
+            <div class="metric"><div class="label">${term('Сумма заказов')}</div><div class="value">${rub(f.orderSum)}</div></div>
+            <div class="metric key"><div class="label">${term('ДРР')}</div><div class="value">${pct(f.drrWbPct)}</div><div class="small muted">от вашей цены ${pct(f.drrPct)} · потолок ${pct(it.economics.breakEvenDrrPct)}</div></div>
+            <div class="metric"><div class="label">${term('ROAS')}</div><div class="value">${f.roas != null ? n(f.roas, 2) : '—'}</div></div>
           </div>
           <p class="small muted">Факт с ${esc(f.from)} по ${esc(f.to)} (${n(f.days)} дн. с данными), по последнему сбору данных. WB отдаёт статистику рекламы с задержкой до нескольких часов, поэтому в кабинете цифры могут быть свежее. Заказы — как в отчёте WB: вместе с заказами других ваших товаров после клика по рекламе.</p>
           <div class="grid two">
@@ -706,7 +745,12 @@
             <div class="calc-out" id="calcOut${idx}">${perDayLine(it.economics.perDay, 'Сейчас')}${scenarioTable(it.scenarios, c)}</div>
           </details>
         </section>`;
-      }).join('')}`;
+      }).join('')}
+      <details class="panel glossary"><summary><b>Шпаргалка: что значат показатели рекламы</b></summary>
+        <p class="small muted">Цепочка: показы → CTR → клики → CR → заказы. Затраты = клики × CPC. CPO = затраты ÷ заказы — сравнивайте с прибылью с заказа. Остальное подсказывает, где чинить.</p>
+        <table class="data compact"><tbody>${['Показы', 'Клики', 'CTR', 'CPC', 'CPM', 'Корзины', 'Заказы', 'CR', 'Затраты', 'CPO', 'CPS', 'Сумма заказов', 'ДРР', 'ROAS', 'Позиция', 'Ставка', 'Безубыточная ставка']
+          .map((k) => `<tr><td><b>${esc(k)}</b></td><td>${esc(TERMS[k].text)}${TERMS[k].act ? `<br/><span class="small muted">Что делать: ${esc(TERMS[k].act)}</span>` : ''}</td></tr>`).join('')}</tbody></table>
+      </details>`;
 
     $app.querySelectorAll('[data-calc]').forEach((btn) =>
       btn.addEventListener('click', async () => {

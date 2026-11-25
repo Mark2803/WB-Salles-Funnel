@@ -150,6 +150,8 @@ export function adFact(db, advertId, nmId, from, to, price = null, { withOthers 
     orderSum: round(r.orderSum, 0),
     ctr: round(div(r.clicks, r.views) * 100, 2),
     cpc: round(div(r.spend, r.clicks), 2),
+    cpm: round(div(r.spend, r.views) * 1000, 0),
+    roas: r.spend > 0 ? round(r.orderSum / r.spend, 2) : null,
     cartRate: round(div(r.atbs, r.clicks) * 100, 1),
     cr: round(div(r.orders, r.clicks) * 100, 2),
     costPerOrder: round(div(r.spend, r.orders), 0),
