@@ -13,7 +13,8 @@
 import { addDays, todayMsk } from './dates.mjs';
 import { nowIso } from './db.mjs';
 import { periodMetrics, productSummary } from './metrics.mjs';
-import { CAMPAIGN_STATUS, LIVE_STATUSES } from './wb/collect.mjs';
+import { LIVE_STATUSES } from './wb/collect.mjs';
+import { effectiveStatus } from './campaign-status.mjs';
 
 const round = (v, d = 1) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 const div = (a, b) => (b ? a / b : null);
@@ -244,11 +245,14 @@ export function listCampaigns(db, { withFinishedDays = 30, today = todayMsk() } 
     .prepare(`SELECT * FROM campaigns WHERE status IN (${LIVE_STATUSES.join(',')}) OR (status = 7 AND substr(COALESCE(updated_at, ''), 1, 10) >= ?)
       ORDER BY CASE status WHEN 9 THEN 0 WHEN 11 THEN 1 WHEN 4 THEN 2 ELSE 3 END, advert_id DESC`)
     .all(since)
-    .map((c) => ({
+    .map((c) => ({ c, st: effectiveStatus(c, db) }))
+    .map(({ c, st }) => ({
       advertId: c.advert_id,
       name: c.name,
-      status: c.status,
-      statusLabel: CAMPAIGN_STATUS[c.status] || String(c.status),
+      status: st.status,
+      apiStatus: st.apiStatus,
+      statusByFact: st.byFact,
+      statusLabel: st.label,
       paymentType: c.payment_type,
       paymentLabel: PAYMENT_LABEL[c.payment_type] || c.payment_type || '—',
       nmIds: parse(c.nm_ids, []),

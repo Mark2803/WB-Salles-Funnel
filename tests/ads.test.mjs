@@ -94,3 +94,13 @@ test('ставки WB в виде массива и заказы других т
   assert.equal(own.orders, 3);
   db.close();
 });
+
+test('статус «пауза» от WB при списании бюджета — считаем кампанию активной', async () => {
+  const { effectiveStatus } = await import('../src/campaign-status.mjs');
+  const now = Date.parse('2026-11-25T16:00:00Z');
+  const recent = { advert_id: 1, status: 11, budget_spent_at: '2026-11-25T14:30:00Z' };
+  assert.deepEqual(effectiveStatus(recent, null, now), { status: 9, label: 'активна', apiStatus: 11, byFact: true });
+  const old = { advert_id: 1, status: 11, budget_spent_at: '2026-11-24T10:00:00Z' };
+  assert.equal(effectiveStatus(old, null, now).status, 11);
+  assert.equal(effectiveStatus({ advert_id: 2, status: 9 }, null, now).byFact, false);
+});

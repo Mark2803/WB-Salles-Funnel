@@ -1,4 +1,5 @@
 // Расчёт показателей: воронка за период, реклама, юнит-экономика, остатки, тревоги.
+import { effectiveStatus } from './campaign-status.mjs';
 import { addDays, dateRange, todayMsk } from './dates.mjs';
 
 const round = (v, d = 1) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
@@ -197,8 +198,9 @@ export function productSummary(db, p, settings, today = todayMsk()) {
   const plan = db.prepare("SELECT id, strategy_key, title, start_date FROM plans WHERE nm_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(p.nm_id);
   // Действующая реклама на товаре (для отметки в сводке)
   const ads = db
-    .prepare("SELECT advert_id, name, status, payment_type, bids_json FROM campaigns WHERE status IN (4, 9, 11) AND EXISTS (SELECT 1 FROM json_each(campaigns.nm_ids) WHERE value = ?)")
+    .prepare("SELECT advert_id, name, status, payment_type, bids_json, budget_spent_at FROM campaigns WHERE status IN (4, 9, 11) AND EXISTS (SELECT 1 FROM json_each(campaigns.nm_ids) WHERE value = ?)")
     .all(p.nm_id)
+    .map((c) => ({ ...c, status: effectiveStatus(c, db).status }))
     .map((c) => {
       const bids = (() => { try { return JSON.parse(c.bids_json || '{}')[p.nm_id] || {}; } catch { return {}; } })();
       return { advertId: c.advert_id, name: c.name, status: c.status, paymentType: c.payment_type, bid: bids.search ?? bids.recommendations ?? null };

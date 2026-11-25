@@ -206,6 +206,10 @@ const MIGRATIONS = [
   );
   CREATE INDEX ad_forecasts_campaign ON ad_forecasts(advert_id, nm_id, id);
   `,
+  // 5 — когда в последний раз заметили списание из бюджета кампании (WB по API может отдавать «пауза» у работающей кампании)
+  `
+  ALTER TABLE campaigns ADD COLUMN budget_spent_at TEXT;
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {

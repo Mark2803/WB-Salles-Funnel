@@ -302,6 +302,9 @@ export async function collectAds(client, db, nmIds, today = todayMsk()) {
     }
   }
 
+  // Бюджет уменьшился с прошлого сбора — кампания тратит, значит, реально работает (см. campaign-status.mjs)
+  const prevBudget = new Map(db.prepare('SELECT advert_id, budget_total FROM campaigns').all().map((r) => [r.advert_id, r.budget_total]));
+  const spentNow = db.prepare('UPDATE campaigns SET budget_spent_at = ? WHERE advert_id = ?');
   transaction(db, () => {
     const up = db.prepare(`INSERT INTO campaigns(advert_id, name, status, payment_type, nm_ids, updated_at, bids_json, placements_json, created_at, started_at, budget_total, daily_limit, spent_today, recommended_json)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -315,6 +318,11 @@ export async function collectAds(client, db, nmIds, today = todayMsk()) {
         a.created ?? null, a.started ?? null, budgets[a.advertId] ?? null, limits[a.advertId]?.limit ?? null, limits[a.advertId]?.spentToday ?? null,
         recommended[a.advertId] ? JSON.stringify(recommended[a.advertId]) : null,
       );
+    }
+    for (const a of adverts) {
+      const before = prevBudget.get(a.advertId);
+      const after = budgets[a.advertId];
+      if (before != null && after != null && after < before - 0.5) spentNow.run(nowIso(), a.advertId);
     }
     const subj = db.prepare('UPDATE products SET subject_id = COALESCE(subject_id, ?), subject_name = COALESCE(subject_name, ?) WHERE nm_id = ?');
     for (const a of adverts) for (const s of a.subjects) subj.run(s.id ?? null, s.name ?? null, Number(s.nmId));

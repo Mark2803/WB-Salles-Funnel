@@ -711,7 +711,7 @@
           <div class="ad-head">
             <div>
               <h2>${esc(shortTitle(it.product.title, it.product.vendorCode) || it.nmId)}</h2>
-              <p class="muted">«${esc(c.name)}» · ${esc(c.paymentLabel)} · <span class="tag ${c.status === 9 ? 'green' : 'grey'}">${esc(c.statusLabel)}</span>
+              <p class="muted">«${esc(c.name)}» · ${esc(c.paymentLabel)} · <span class="tag ${c.status === 9 ? 'green' : 'grey'}">${esc(c.statusLabel)}</span>${c.statusByFact ? ' <span class="small muted" title="WB по API отдаёт статус «на паузе», но бюджет кампании за последние часы уменьшился — значит, реклама идёт. Так бывает: в кабинете кампания активна.">(по расходу бюджета; WB по API пишет «пауза»)</span>' : ''}
                 ${c.placements ? ` · ${[c.placements.search ? 'поиск' : '', c.placements.recommendations ? 'рекомендации' : ''].filter(Boolean).join(' и ')}` : ''}
                 · создана ${c.createdAt ? esc(String(c.createdAt).slice(0, 10)) : '—'} · <a href="#/product/${it.nmId}">товар ${it.nmId}</a></p>
             </div>
