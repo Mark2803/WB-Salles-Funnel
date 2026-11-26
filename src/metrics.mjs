@@ -42,7 +42,7 @@ export function unitEconomics({ price, cost, settings, inputs = {} }) {
   let logisticsSource = null;
   if (inputs.fact?.logisticsPerSold != null) {
     logisticsPerSold = inputs.fact.logisticsPerSold;
-    logisticsSource = `${inputs.fact.label}; туда и обратно${inputs.fact.logisticsPerDelivery != null ? `, медиана за одну доставку ${String(round(inputs.fact.logisticsPerDelivery, 1)).replace('.', ',')} ₽` : ''}`;
+    logisticsSource = `${inputs.fact.label}; доставка покупателю и возвраты от покупателей; вывоз товара вам («к продавцу») не входит${inputs.fact.logisticsPerDelivery != null ? `, медиана за одну доставку ${String(round(inputs.fact.logisticsPerDelivery, 1)).replace('.', ',')} ₽` : ''}`;
   } else if (inputs.logistics?.perDelivery != null) {
     logisticsPerSold = inputs.logistics.perDelivery / (buyout ?? 1);
     logisticsSource = inputs.logistics.source;
@@ -53,7 +53,7 @@ export function unitEconomics({ price, cost, settings, inputs = {} }) {
   let storageSource = null;
   if (inputs.fact?.storagePerSold != null) {
     storagePerSold = inputs.fact.storagePerSold;
-    storageSource = `${inputs.fact.label}; хранение и приёмка`;
+    storageSource = `${inputs.fact.label}; платное хранение и обработка товара при приёмке, в расчёте на одну продажу`;
   } else if (inputs.storage?.perDay != null && inputs.storage?.days != null) {
     storagePerSold = inputs.storage.perDay * inputs.storage.days;
     storageSource = inputs.storage.source;
@@ -183,7 +183,10 @@ export function tariffFor(db, nmId) {
 //   логистика на проданную штуку — все «услуги по доставке» (туда и обратно) ÷ чистые продажи;
 //   логистика за одну доставку — медиана по строкам «Логистика» (услуги ÷ количество доставок);
 //   хранение и приёмка — суммы ÷ чистые продажи.
-// Строки с логистикой больше чем в 20 раз выше медианы (разовые ошибочные начисления WB) не учитываются.
+// В логистику продажи идут только доставки покупателю и обратно («К клиенту…», «От клиента…», коррекции).
+// Доставки «К продавцу» / «От продавца» (вывоз товара со склада вам, возврат неопознанного товара) — разовые
+// расходы, не на каждую продажу: 30.09.2026 WB вернул 595 шт. «неопознанного товара» по 255 ₽ = 151 725 ₽.
+// Строки с логистикой больше чем в 20 раз выше медианы тоже не учитываются.
 const median = (arr) => {
   const a = arr.filter((x) => Number.isFinite(x)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -195,7 +198,7 @@ export function actualCosts(db, nmId, today = todayMsk(), days = 90, minSold = 3
   const from = addDays(today, -days);
   const where = nmId == null ? 'date >= ?' : 'nm_id = ? AND date >= ?';
   const args = nmId == null ? [from] : [nmId, from];
-  const lines = db.prepare(`SELECT oper_name, quantity, retail_price_disc, for_pay, commission_pct, delivery, delivery_amount, return_amount, storage, acceptance, penalty, deduction, acquiring
+  const lines = db.prepare(`SELECT oper_name, bonus_type, quantity, retail_price_disc, for_pay, commission_pct, delivery, delivery_amount, return_amount, storage, acceptance, penalty, deduction, acquiring
     FROM finance_lines WHERE ${where}`).all(...args);
   if (!lines.length) return null;
   const isSale = (l) => /^Продажа/.test(l.oper_name || '');
@@ -204,8 +207,9 @@ export function actualCosts(db, nmId, today = todayMsk(), days = 90, minSold = 3
   const returned = lines.filter(isReturn).reduce((n, l) => n + (l.quantity || 0), 0);
   const net = sold - returned;
   if (net < minSold) return null; // мало продаж — оценка ненадёжна
+  const toSeller = (l) => /продавц/i.test(l.bonus_type || '');
   const perDelivery = lines
-    .filter((l) => (l.delivery || 0) > 0 && (l.delivery_amount || 0) + (l.return_amount || 0) > 0)
+    .filter((l) => !toSeller(l) && (l.delivery || 0) > 0 && (l.delivery_amount || 0) + (l.return_amount || 0) > 0)
     .map((l) => l.delivery / ((l.delivery_amount || 0) + (l.return_amount || 0)));
   const deliveryMedian = median(perDelivery);
   const isOutlier = (l) => deliveryMedian != null && (l.delivery || 0) > 0 && (l.delivery / Math.max(1, (l.delivery_amount || 0) + (l.return_amount || 0))) > deliveryMedian * 20;
@@ -213,8 +217,9 @@ export function actualCosts(db, nmId, today = todayMsk(), days = 90, minSold = 3
   const sum = (key, filter = () => true) => lines.filter(filter).reduce((n, l) => n + (l[key] || 0), 0);
   const saleRetail = sum('retail_price_disc', isSale);
   const saleForPay = sum('for_pay', isSale);
-  const delivery = sum('delivery', (l) => !isOutlier(l));
-  const deliveries = sum('delivery_amount');
+  const delivery = sum('delivery', (l) => !isOutlier(l) && !toSeller(l));
+  const deliveries = sum('delivery_amount', (l) => !toSeller(l));
+  const toSellerSum = sum('delivery', toSeller);
   return {
     soldUnits: net,
     days,
@@ -231,6 +236,7 @@ export function actualCosts(db, nmId, today = todayMsk(), days = 90, minSold = 3
     acceptancePerSold: sum('acceptance') / net,
     storageTotal: sum('storage'),
     penalties: sum('penalty') + sum('deduction'),
+    toSellerSum,
     outliers: outliers.length,
     outlierSum: outliers.reduce((n, l) => n + (l.delivery || 0), 0),
   };

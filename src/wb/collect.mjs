@@ -656,6 +656,7 @@ export function parseFinanceLines(resp) {
       vendorCode: l.vendorCode || null,
       subject: l.subjectName || null,
       bonusType: l.bonusTypeName || null,
+      rebill: num(l.rebillLogisticCost),
     }));
 }
 
@@ -663,7 +664,8 @@ export async function collectFinance(client, db, nmIds, today = todayMsk()) {
   let rrdId = 0;
   let saved = 0;
   // Первый раз — за год (для медиан по магазину), дальше — последние 35 дней (WB дополняет отчёт задним числом)
-  const hasData = db.prepare('SELECT 1 FROM finance_lines WHERE delivery_amount IS NOT NULL LIMIT 1').get();
+  // rebill добавлен позже: если его ещё нет ни в одной строке — тоже перечитываем год
+  const hasData = db.prepare('SELECT 1 FROM finance_lines WHERE delivery_amount IS NOT NULL AND rebill IS NOT NULL LIMIT 1').get();
   const dateFrom = addDays(today, hasData ? -35 : -365);
   for (let page = 0; page < 20; page++) {
     const resp = await client.post('finance', '/api/finance/v1/sales-reports/detailed', {
@@ -677,12 +679,12 @@ export async function collectFinance(client, db, nmIds, today = todayMsk()) {
     const rows = parseFinanceLines(resp);
     transaction(db, () => {
       const up = db.prepare(`INSERT INTO finance_lines(rrd_id, nm_id, date, doc_type, oper_name, quantity, retail_price_disc, for_pay, commission_pct, delivery, storage, acceptance, penalty, deduction, acquiring,
-          delivery_amount, return_amount, office_name, vendor_code, subject, bonus_type)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(rrd_id) DO UPDATE SET delivery_amount = excluded.delivery_amount, return_amount = excluded.return_amount,
+          delivery_amount, return_amount, office_name, vendor_code, subject, bonus_type, rebill)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(rrd_id) DO UPDATE SET rebill = excluded.rebill, delivery_amount = excluded.delivery_amount, return_amount = excluded.return_amount,
           office_name = excluded.office_name, vendor_code = excluded.vendor_code, subject = excluded.subject, bonus_type = excluded.bonus_type`);
       for (const r of rows) {
         up.run(r.rrdId, r.nmId ?? 0, r.date, r.docType, r.operName, r.quantity, r.retailPriceDisc, r.forPay, r.commissionPct, r.delivery, r.storage, r.acceptance, r.penalty, r.deduction, r.acquiring,
-          r.deliveryAmount, r.returnAmount, r.officeName, r.vendorCode, r.subject, r.bonusType);
+          r.deliveryAmount, r.returnAmount, r.officeName, r.vendorCode, r.subject, r.bonusType, r.rebill);
         saved++;
       }
     });

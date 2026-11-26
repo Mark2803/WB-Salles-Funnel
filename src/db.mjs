@@ -253,6 +253,10 @@ const MIGRATIONS = [
   ALTER TABLE finance_lines ADD COLUMN bonus_type TEXT;
   CREATE INDEX finance_lines_date ON finance_lines(date);
   `,
+  // 8 — «Возмещение издержек по перемещению/перевозке товара» (rebillLogisticCost), чтобы видеть эти расходы
+  `
+  ALTER TABLE finance_lines ADD COLUMN rebill REAL;
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {

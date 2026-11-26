@@ -20,7 +20,7 @@ console.log(`Финотчёт с ${from}. Строк всего: ${db.prepare('S
 
 show('По видам операций', db.prepare(`SELECT oper_name, COALESCE(bonus_type,'') bonus, COUNT(*) lines, SUM(quantity) qty,
     SUM(retail_price_disc) retail, SUM(for_pay) for_pay, SUM(delivery) delivery, SUM(delivery_amount) deliv_n, SUM(return_amount) ret_n,
-    SUM(deduction) deduction, SUM(storage) storage, SUM(acceptance) acceptance, SUM(penalty) penalty, SUM(acquiring) acquiring
+    SUM(deduction) deduction, SUM(storage) storage, SUM(acceptance) acceptance, SUM(penalty) penalty, SUM(acquiring) acquiring, SUM(rebill) rebill
   FROM finance_lines WHERE date >= ? GROUP BY oper_name, bonus ORDER BY lines DESC LIMIT 40`).all(from));
 
 show('Логистика по неделям', db.prepare(`SELECT strftime('%Y-%W', date) week, MIN(date) first, COUNT(*) lines, SUM(delivery) delivery,
@@ -37,5 +37,10 @@ show('Продажи: цена, к перечислению, комиссия WB
 show('Продажи по товарам', db.prepare(`SELECT nm_id, COALESCE(vendor_code,'') vendor, COUNT(*) lines, SUM(quantity) qty, SUM(retail_price_disc) retail, SUM(for_pay) for_pay,
     ROUND(100 * (1 - SUM(for_pay) / NULLIF(SUM(retail_price_disc),0)), 1) kept_pct, ROUND(AVG(commission_pct),1) kvv_avg
   FROM finance_lines WHERE date >= ? AND oper_name LIKE 'Продажа%' GROUP BY nm_id ORDER BY qty DESC LIMIT 30`).all(from));
+
+const { actualCosts } = await import('../src/metrics.mjs');
+const shop = actualCosts(db, null, todayMsk(), 90, 1);
+console.log('\n== Итог расчёта «Воронки» по магазину за 90 дней');
+console.log(shop ? `продаж ${shop.soldUnits}; комиссия WB фактически ${r(shop.commissionPct, 1)}%; логистика на продажу ${r(shop.logisticsPerSold, 1)} ₽ (за доставку ${r(shop.logisticsPerDelivery, 1)} ₽); хранение+приёмка на продажу ${r(shop.storagePerSold + shop.acceptancePerSold, 1)} ₽; выкуп ${r(shop.buyoutPct, 0)}%; вывоз товара вам (не входит) ${r(shop.toSellerSum)} ₽` : 'мало данных');
 
 db.close();

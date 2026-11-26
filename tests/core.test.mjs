@@ -325,3 +325,24 @@ test('факт из финотчёта: фактическая комиссия,
   assert.equal(shop.soldUnits, 14);
   db.close();
 });
+
+test('финотчёт: доставка «к продавцу» (вывоз товара) не входит в логистику продажи', async () => {
+  const { openDb } = await import('../src/db.mjs');
+  const { actualCosts } = await import('../src/metrics.mjs');
+  const db = openDb('', { memory: true });
+  const ins = db.prepare(`INSERT INTO finance_lines(rrd_id, nm_id, date, oper_name, bonus_type, quantity, retail_price_disc, for_pay, delivery, delivery_amount, return_amount)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+  let id = 1;
+  for (let i = 0; i < 10; i++) {
+    ins.run(id++, 5, '2026-11-20', 'Продажа', '', 1, 120, 81, 0, 0, 0);
+    ins.run(id++, 5, '2026-11-20', 'Доставка', 'К клиенту при продаже', 0, 0, 0, 70, 1, 0);
+  }
+  for (let i = 0; i < 50; i++) ins.run(id++, 6, '2026-11-01', 'Доставка', 'Возврат неопознанного товара (К продавцу)', 0, 0, 0, 255, 1, 0);
+  const shop = actualCosts(db, null, '2026-11-26', 90, 10);
+  assert.equal(shop.logisticsPerSold, 70);
+  assert.equal(shop.logisticsPerDelivery, 70);
+  assert.equal(shop.buyoutPct, 100);
+  assert.equal(shop.toSellerSum, 255 * 50);
+  assert.equal(Math.round(shop.commissionPct * 10) / 10, 32.5);
+  db.close();
+});
