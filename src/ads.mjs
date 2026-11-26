@@ -562,3 +562,145 @@ export function adsCalc(db, settings, { advertId, nmId, bid, dailyBudget, crPct,
   const econ = adEconomics(inputs);
   return { inputs, economics: econ, scenarios: bidScenarios(inputs, { extraBids: [econ.breakEvenBid, econ.targetBid].filter(Boolean) }) };
 }
+
+// ---------- Прогноз запуска рекламы (для товаров без кампании) ----------
+//
+// Всё из ваших данных, допущения подписаны:
+//   маржа с заказа       — юнит-экономика товара × выкуп (диапазон выкупа);
+//   конверсия клика      — конверсия карточки без рекламы за 30 дней (диапазон 90%),
+//                          × поправка «реклама / обычные переходы» по вашим прошлым кампаниям (если есть);
+//                          мало переходов у карточки — конверсия всех отслеживаемых карточек магазина;
+//   цена клика           — заранее её знает только аукцион WB; для ориентира — сколько стоил клик в ваших кампаниях;
+//   ставки               — безопасная (в плюс даже в худшем варианте), безубыточная, под цель ДРР; WB не спишет больше ставки;
+//   проверка             — сколько стоят первые 100 кликов и какая конверсия нужна, чтобы продолжать.
+const MIN_OPENS_FOR_CARD_CR = 30;
+
+function organicOf(db, nmId, from, to) {
+  const m = periodMetrics(db, nmId, from, to);
+  const ad = db.prepare('SELECT COALESCE(SUM(clicks),0) clicks, COALESCE(SUM(orders),0) orders FROM ads_daily WHERE nm_id = ? AND date BETWEEN ? AND ?').get(nmId, from, to);
+  return { opens: Math.max(0, m.open - ad.clicks), orders: Math.max(0, m.orders - ad.orders) };
+}
+
+/** Насколько реклама конвертирует иначе, чем обычные переходы: по вашим кампаниям (≥50 кликов, у карточки ≥30 переходов без рекламы). */
+export function adVsCardFactor(db, today = todayMsk()) {
+  const from = addDays(today, -29);
+  const rows = db.prepare(`SELECT nm_id, SUM(clicks) clicks, SUM(orders) orders FROM ads_daily WHERE date BETWEEN ? AND ? GROUP BY nm_id HAVING SUM(clicks) >= 50`).all(from, today);
+  let adOrders = 0;
+  let expected = 0;
+  const parts = [];
+  for (const r of rows) {
+    const org = organicOf(db, r.nm_id, from, today);
+    if (org.opens < MIN_OPENS_FOR_CARD_CR || org.orders === 0) continue;
+    const cardCr = org.orders / org.opens;
+    adOrders += r.orders;
+    expected += r.clicks * cardCr; // столько заказов было бы, если бы реклама конвертировала как карточка
+    parts.push({ nmId: r.nm_id, adCr: r.orders / r.clicks, cardCr });
+  }
+  if (expected <= 0) return null;
+  return { factor: adOrders / expected, parts };
+}
+
+/** Сколько стоил клик в ваших кампаниях с оплатой за клик за 30 дней — ориентир, не прогноз аукциона. */
+export function ownCpcReference(db, today = todayMsk()) {
+  const rows = db.prepare(`SELECT d.advert_id, c.name, SUM(d.clicks) clicks, SUM(d.spend) spend FROM ads_daily d JOIN campaigns c ON c.advert_id = d.advert_id
+      WHERE d.date >= ? AND c.payment_type = 'cpc' GROUP BY d.advert_id HAVING SUM(d.clicks) >= 10`).all(addDays(today, -29));
+  const list = rows.map((r) => ({ advertId: r.advert_id, name: r.name, clicks: r.clicks, cpc: round(r.spend / r.clicks, 2) }));
+  const clicks = list.reduce((a, r) => a + r.clicks, 0);
+  const avg = clicks ? list.reduce((a, r) => a + r.cpc * r.clicks, 0) / clicks : null;
+  return { list, avg: round(avg, 2), min: list.length ? Math.min(...list.map((r) => r.cpc)) : null, max: list.length ? Math.max(...list.map((r) => r.cpc)) : null };
+}
+
+export function launchForecast(db, settings, nmId, today = todayMsk()) {
+  const product = db.prepare('SELECT * FROM products WHERE nm_id = ?').get(nmId) || { nm_id: nmId };
+  const summary = productSummary(db, product, settings, today);
+  const u = summary.unit;
+  const price = summary.snapshot.seller_price ?? null;
+  const warnings = [];
+  const stock = summary.snapshot.stocks_wb;
+  if (!stock) warnings.push({ level: 'critical', text: 'Нет остатка на складах WB — реклама не даст продаж, сначала поставка.' });
+  else if (summary.stockDays != null && summary.stockDays < (settings.minStockDays ?? 14)) warnings.push({ level: 'warning', text: `Остатка хватит примерно на ${Math.round(summary.stockDays)} дн. — реклама ускорит продажи, подготовьте поставку.` });
+  const rating = summary.snapshot.feedback_rating;
+  if (rating && rating < 4.5) warnings.push({ level: 'warning', text: `Рейтинг ${String(rating).replace('.', ',')} — с рекламы будут кликать, но заказывать реже. Сначала ответьте на негативные отзывы.` });
+  if (u.profitPerUnit == null) warnings.push({ level: 'critical', text: `Маржу не посчитать: нет ${u.missing.join(', ')}.` });
+
+  // Конверсия карточки без рекламы
+  const from = addDays(today, -29);
+  const own = organicOf(db, nmId, from, today);
+  let card;
+  if (own.opens >= MIN_OPENS_FOR_CARD_CR) {
+    card = { orders: own.orders, opens: own.opens, source: `карточка без рекламы за 30 дней: ${own.orders} заказов из ${own.opens} переходов` };
+  } else {
+    const ids = db.prepare('SELECT nm_id FROM products WHERE active = 1').all().map((r) => r.nm_id);
+    const sum = ids.map((id) => organicOf(db, id, from, today)).reduce((a, x) => ({ opens: a.opens + x.opens, orders: a.orders + x.orders }), { opens: 0, orders: 0 });
+    card = sum.opens >= MIN_OPENS_FOR_CARD_CR
+      ? { orders: sum.orders, opens: sum.opens, source: `у карточки мало переходов (${own.opens}) — взята конверсия всех отслеживаемых карточек без рекламы: ${sum.orders} заказов из ${sum.opens} переходов` }
+      : null;
+  }
+  const w = card ? wilson(card.orders, card.opens) : null;
+  const fac = adVsCardFactor(db, today);
+  const k = fac ? fac.factor : 1;
+  const crSource = card
+    ? `${card.source}${fac ? `; × ${String(round(k, 2)).replace('.', ',')} — так реклама конвертировала относительно обычных переходов в ваших кампаниях` : '; допущение: реклама конвертирует как обычные переходы (своих кампаний для сравнения пока нет)'}`
+    : 'нет данных: у карточек меньше 30 переходов без рекламы за 30 дней';
+  const cr = w ? w.p * k : null;
+  const inputs = {
+    paymentType: 'cpc',
+    price,
+    profitPerUnit: u.profitPerUnit,
+    buyoutPct: u.buyoutPct,
+    buyoutLow: u.buyoutLow,
+    buyoutHigh: u.buyoutHigh,
+    targetDrrPct: settings.targetDrrPct,
+    cr,
+    crLow: w ? Math.min(1, w.low * k) : null,
+    crHigh: w ? Math.min(1, w.high * k) : null,
+    chargeRatio: 1,
+  };
+  const ref = ownCpcReference(db, today);
+  // Цена клика для расчёта результата: ориентир по вашим кампаниям, но не выше безопасной ставки
+  const bounds = cr != null ? adRange({ ...inputs, bid: 1 }) : null;
+  const safe = bounds?.pess?.breakEvenBid ?? null;
+  const breakEven = bounds?.base?.breakEvenBid ?? null;
+  const target = bounds?.base?.targetBid ?? null;
+  let planBid = null;
+  let planBidSource = null;
+  if (safe != null && safe > 0) {
+    if (ref.avg != null && ref.avg < safe) {
+      planBid = ref.avg;
+      planBidSource = `средняя цена клика в ваших кампаниях (${String(ref.avg).replace('.', ',')} ₽) — она ниже безопасной`;
+    } else {
+      planBid = safe;
+      planBidSource = 'безопасная ставка (WB спишет не больше)';
+    }
+  } else if (breakEven != null && breakEven > 0) {
+    planBid = Math.min(breakEven, ref.avg ?? breakEven);
+    planBidSource = 'безопасной ставки нет (в худшем варианте заказов может не быть), считаем по безубыточной или средней цене клика в ваших кампаниях';
+  }
+  const range = planBid ? adRange({ ...inputs, bid: planBid }) : null;
+  const plan = range ? budgetPlan({ ...inputs, bid: planBid, dailyBudget: null }, range, { clicks: 0 }, { stockUnits: stock }) : null;
+  const beCr = range?.base?.profitPerOrder > 0 ? planBid / range.base.profitPerOrder : null;
+  return {
+    nmId,
+    product: { title: summary.title, vendorCode: summary.vendorCode, price, stocks: stock, stockDays: summary.stockDays, rating },
+    unit: u,
+    cr: { value: cr, low: inputs.crLow, high: inputs.crHigh, source: crSource, factor: fac ? round(k, 2) : null },
+    bids: { safe, breakEven, target, bestCase: bounds?.opt?.breakEvenBid ?? null },
+    cpcReference: ref,
+    planBid: planBid != null ? round(planBid, 1) : null,
+    planBidSource,
+    range: range ? { pess: pick(range.pess), base: pick(range.base), opt: pick(range.opt) } : null,
+    budget: plan,
+    // Максимум риска: 100 кликов по наибольшей рекомендуемой ставке (WB не спишет больше ставки)
+    test: planBid && beCr != null ? { clicks: MIN_CLICKS_FOR_CR, spend: round(MIN_CLICKS_FOR_CR * Math.max(planBid, safe ?? 0), 0), needOrders: Math.ceil(MIN_CLICKS_FOR_CR * beCr), needCrPct: round(beCr * 100, 1) } : null,
+    warnings,
+  };
+}
+
+/** Прогнозы запуска для всех отслеживаемых товаров без действующей кампании. */
+export function launchForecasts(db, settings, today = todayMsk()) {
+  const withAds = new Set(listCampaigns(db, { withFinishedDays: 0, today }).filter((c) => LIVE_STATUSES.includes(c.status)).flatMap((c) => c.nmIds));
+  return db.prepare('SELECT nm_id FROM products WHERE active = 1 ORDER BY sort, nm_id').all()
+    .map((r) => r.nm_id)
+    .filter((id) => !withAds.has(id))
+    .map((id) => launchForecast(db, settings, id, today));
+}

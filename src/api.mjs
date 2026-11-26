@@ -17,7 +17,7 @@ import { addDays, isDate, todayMsk } from './dates.mjs';
 import { baselineFor, overview, productSeries, productSummary } from './metrics.mjs';
 import { STRATEGIES, defaultParams, getStrategy, normalizeParams, planVsFact, simulate, strategyCatalog } from './strategies.mjs';
 import { buildClaudeSummary } from './summary.mjs';
-import { adsCalc, adsOverview } from './ads.mjs';
+import { adsCalc, adsOverview, launchForecast, launchForecasts } from './ads.mjs';
 import { isSyncRunning, lastRuns, runSync } from './sync.mjs';
 
 export class HttpError extends Error {
@@ -131,8 +131,12 @@ export function createApi({ db, cfg, log = console, verifyToken }) {
     const today = todayMsk();
     const days = Math.min(90, Math.max(7, Number(url.searchParams.get('days')) || 30));
     const search = db.prepare('SELECT date, avg_position, visibility, queries_json FROM search_daily WHERE nm_id = ? ORDER BY date DESC LIMIT 1').get(p.nm_id);
+    const summary = productSummary(db, p, settings, today);
+    const hasLiveAds = (summary.campaigns || []).some((c) => [4, 9, 11].includes(c.status));
     return {
-      summary: productSummary(db, p, settings, today),
+      summary,
+      launch: hasLiveAds ? null : launchForecast(db, settings, p.nm_id, today),
+      targetDrrPct: settings.targetDrrPct,
       series: productSeries(db, p.nm_id, days, today),
       feedbacks: db.prepare('SELECT id, created_at, rating, text, pros, cons, answered, answer_text FROM feedbacks WHERE nm_id = ? ORDER BY created_at DESC LIMIT 20').all(p.nm_id),
       search: search ? { date: search.date, avgPosition: search.avg_position, visibility: search.visibility, queries: JSON.parse(search.queries_json || '[]') } : null,
@@ -160,7 +164,7 @@ export function createApi({ db, cfg, log = console, verifyToken }) {
   // ---------- Реклама: кампании WB, прогноз, факт, советы, калькулятор ----------
   route('GET', '/api/ads', () => {
     const settings = getSettings(db);
-    return { items: adsOverview(db, settings), targetDrrPct: settings.targetDrrPct };
+    return { items: adsOverview(db, settings), launch: launchForecasts(db, settings), targetDrrPct: settings.targetDrrPct };
   });
 
   route('POST', '/api/ads/calc', ({ body }) => {

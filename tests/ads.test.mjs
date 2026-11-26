@@ -125,3 +125,29 @@ test('ноль заказов: худший вариант — потеря вс
   const recs = adRecommendations({ econ: r.base, range: r, fact: { clicks: 54, orders: 0, spend: 439, perDay: { spend: 80, clicks: 10 } }, inputs: inp, recommended: null, organicCr: null, stockDays: 60, settings: { targetDrrPct: 20, minStockDays: 14 } });
   assert.ok(recs.some((x) => x.level === 'warning' && /Скорее в минус/.test(x.text)), JSON.stringify(recs));
 });
+
+test('прогноз запуска рекламы: из конверсии карточки и маржи, с поправкой по своим кампаниям', async () => {
+  const { openDb } = await import('../src/db.mjs');
+  const { launchForecast, adVsCardFactor } = await import('../src/ads.mjs');
+  const db = openDb('', { memory: true });
+  const today = '2026-11-26';
+  db.prepare("INSERT INTO products(nm_id, vendor_code, title, active, cost_per_unit) VALUES (1, 'A', 'Товар А', 1, 200), (2, 'B', 'Товар Б', 1, 200)").run();
+  const f = db.prepare('INSERT INTO funnel_daily(nm_id, date, open_count, order_count) VALUES (?,?,?,?)');
+  for (let i = 0; i < 10; i++) {
+    const d = `2026-11-${String(16 + i).padStart(2, '0')}`;
+    f.run(1, d, 30, 2); // карточка с рекламой: 20 из них — рекламные клики
+    f.run(2, d, 20, 1); // без рекламы: 5%
+  }
+  db.prepare("INSERT INTO campaigns(advert_id, name, status, payment_type, nm_ids) VALUES (7, 'к', 9, 'cpc', '[1]')").run();
+  const a = db.prepare('INSERT INTO ads_daily(nm_id, date, advert_id, clicks, orders, spend) VALUES (?,?,?,?,?,?)');
+  for (let i = 0; i < 10; i++) a.run(1, `2026-11-${String(16 + i).padStart(2, '0')}`, 7, 20, 1, 120);
+  db.prepare("INSERT INTO snapshot_daily(nm_id, date, seller_price, stocks_wb) VALUES (2, ?, 1000, 50)").run(today);
+  // без рекламы у товара 1: 100 переходов, 10 заказов → 10%; реклама: 200 кликов, 10 заказов → 5% → поправка 0,5
+  const fac = adVsCardFactor(db, today);
+  assert.equal(Math.round(fac.factor * 100) / 100, 0.5);
+  const l = launchForecast(db, { targetDrrPct: 20, taxPct: 6 }, 2, today);
+  assert.equal(Math.round(l.cr.value * 1000) / 1000, 0.025); // 5% карточки × 0,5
+  assert.equal(l.cpcReference.avg, 6);
+  assert.ok(l.cr.low < l.cr.value && l.cr.high > l.cr.value);
+  db.close();
+});

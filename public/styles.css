@@ -202,3 +202,8 @@ th.num .term:hover::after, th.num .term:focus::after, td.num .term:hover::after 
 .corridor-zones li { margin: 4px 0; }
 .tag.red { background: #fde8e8; color: var(--red); }
 table.data tr.current td { background: var(--accent-soft); }
+
+/* Прогноз запуска рекламы */
+.section-title { margin: 22px 0 6px; }
+details.launch > summary { cursor: pointer; list-style: revert; }
+details.launch[open] > summary { margin-bottom: 10px; }

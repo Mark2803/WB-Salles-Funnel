@@ -2,7 +2,7 @@
 import { addDays, todayMsk } from './dates.mjs';
 import { overview } from './metrics.mjs';
 import { getStrategy, planVsFact } from './strategies.mjs';
-import { adsOverview } from './ads.mjs';
+import { adsOverview, launchForecasts } from './ads.mjs';
 
 const round1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
 const fmt = (v, suffix = '') => (v == null ? '—' : Object.is(v, -0) ? `0${suffix}` : `${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}${suffix}`);
@@ -57,6 +57,14 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
       lines.push(`  - Бюджет в день при нынешней ставке (клик ${fmt(a.budget.cpc)} ₽): ${a.budget.rows.map((r) => `${r.budget} ₽ → ${fmt(r.clicks)} кликов, заказов ${fmt(r.pess?.orders)}…${fmt(r.opt?.orders)}, прибыль ${fmt(r.pess?.profit)}…${fmt(r.opt?.profit)} ₽/день`).join('; ')}.${a.budget.test ? ` До надёжной конверсии ещё ${a.budget.test.clicks} кликов ≈ ${a.budget.test.spend} ₽.` : ''}`);
     }
     for (const r of a.recommendations) lines.push(`  - ${r.text}`);
+  }
+  lines.push('');
+  lines.push('## Прогноз запуска рекламы (товары без кампании)');
+  const launch = launchForecasts(db, settings, today);
+  if (!launch.length) lines.push('- нет');
+  for (const l of launch) {
+    const g = l.range;
+    lines.push(`- ${l.nmId} ${l.product.title || l.product.vendorCode || ''}: маржа с заказа ${fmt(g?.base.profitPerOrder, ' ₽')}; конверсия клика ${fmt(round1(l.cr.low * 100))}…${fmt(round1(l.cr.high * 100), '%')} (ожидаемо ${fmt(round1(l.cr.value * 100), '%')}; ${l.cr.source}); ставки: безопасная ${fmt(l.bids.safe)}, безубыточная ${fmt(l.bids.breakEven)}, под цель ${fmt(l.bids.target)} ₽; ориентир цены клика по вашим кампаниям ${fmt(l.cpcReference.avg)} ₽.${g ? ` При цене клика ${fmt(l.planBid)} ₽ (${l.planBidSource}): 100 кликов → прибыль ${fmt(g.pess.profitPer100Clicks)}…${fmt(g.opt.profitPer100Clicks)} ₽.` : ''}${l.test ? ` Проверка: 100 кликов ≈ ${l.test.spend} ₽, продолжать, если будет хотя бы ${l.test.needOrders} заказов (${fmt(l.test.needCrPct, '%')}).` : ''}${l.warnings.length ? ` Внимание: ${l.warnings.map((x) => x.text).join(' ')}` : ''}`);
   }
   lines.push('');
   const plans = db.prepare("SELECT * FROM plans WHERE status = 'active' ORDER BY id").all();

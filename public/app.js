@@ -354,6 +354,7 @@
           <p><a class="btn" href="#/strategies?nm=${nmId}">Подобрать стратегию</a></p>
         </div>
       </div>
+      ${d.launch ? `<h2 class="section-title">Прогноз запуска рекламы</h2>${launchHtml(d.launch, { open: true, targetDrrPct: d.targetDrrPct })}` : ''}
       <div class="panel"><h2>Переходы и заказы по дням</h2><div id="chFunnel"></div><p class="small muted">Фиолетовые отметки — записи из журнала действий (наведите на точку).</p></div>
       <div class="grid two">
         <div class="panel"><h2>Конверсии, %</h2><div id="chConv"></div></div>
@@ -673,16 +674,59 @@
   // ---------- Журнал ----------
 
   // ---------- Реклама: каждая кампания — прогноз, факт, советы, калькулятор ----------
+  // Прогноз запуска рекламы для товара без кампании (общий блок: вкладка «Реклама» и страница товара)
+  function launchHtml(l, { open = false, targetDrrPct = null } = {}) {
+    const g = l.range;
+    const b = l.budget;
+    const levelCls = { critical: 'critical', warning: 'warning' };
+    const pr = (o) => (o ? `${n(o.orders, 1)} зак. · <span class="${o.profit < 0 ? 'down' : ''}">${rub(o.profit)}</span>` : '—');
+    const ref = l.cpcReference;
+    const title = esc(shortTitle(l.product.title, l.product.vendorCode) || l.nmId);
+    const head = g
+      ? `безопасная ставка <b>${l.bids.safe != null ? `${n(l.bids.safe, 1)} ₽` : 'нет'}</b> · безубыточная ${n(l.bids.breakEven, 1)} ₽`
+      : 'не посчитать';
+    return `<details class="panel launch"${open ? ' open' : ''}><summary><b>${title}</b> <span class="small muted">${l.nmId} · ${head}</span></summary>
+      ${l.warnings.length ? `<ul class="alerts">${l.warnings.map((w) => `<li class="${levelCls[w.level] || 'info'}">${esc(w.text)}</li>`).join('')}</ul>` : ''}
+      ${g ? `
+      <p class="small muted">Всё из ваших данных; чего WB заранее не знает никто — сколько возьмёт аукцион за клик. После запуска кампания подхватится сама (в течение часа), прогноз запомнится, а дальше расчёт будет подстраиваться под факт кликов и заказов.</p>
+      <table class="data compact"><tbody>
+        <tr><td>${term('Маржа', 'Маржа с заказа')} <span class="small muted">(маржа с продажи × выкуп ${l.unit.buyoutLow != null ? `${pct(l.unit.buyoutLow, 0)}…${pct(l.unit.buyoutHigh, 0)}` : pct(l.unit.buyoutPct, 0)})</span></td><td class="num">${rub(g.pess.profitPerOrder)} … ${rub(g.opt.profitPerOrder)}</td></tr>
+        <tr><td>${term('CR', 'Конверсия клика в заказ')} <span class="small muted">(${esc(l.cr.source)})</span></td><td class="num"><b>${pct(l.cr.low * 100, 1)} … ${pct(l.cr.high * 100, 1)}</b><div class="small muted">ожидаемо ${pct(l.cr.value * 100, 1)}</div></td></tr>
+        <tr><td><b>Безопасная ставка</b> <span class="small muted">(в плюс даже в худшем варианте)</span></td><td class="num"><b>${l.bids.safe != null ? `${n(l.bids.safe, 1)} ₽` : 'нет'}</b></td></tr>
+        <tr><td>${term('Безубыточная ставка')} <span class="small muted">(при ожидаемой конверсии; выше — в минус)</span></td><td class="num">${n(l.bids.breakEven, 1)} ₽</td></tr>
+        <tr><td>Ставка под цель ДРР ${pct(targetDrrPct, 0)}</td><td class="num">${n(l.bids.target, 1)} ₽</td></tr>
+        <tr><td>Цена клика в ваших кампаниях <span class="small muted">(ориентир: столько брал аукцион за ваши другие товары за 30 дней)</span></td><td class="num">${ref.avg != null ? `${n(ref.min, 2)} … ${n(ref.max, 2)} ₽` : 'кампаний пока нет'}</td></tr>
+      </tbody></table>
+      <h3>Если клик обойдётся в ${n(l.planBid, 1)} ₽</h3>
+      <p class="small muted">${esc(l.planBidSource)}.</p>
+      <table class="data compact"><thead><tr><th></th><th class="num">Худший</th><th class="num">Ожидаемый</th><th class="num">Лучший</th></tr></thead><tbody>
+        <tr><td><b>Прибыль со 100 кликов</b></td><td class="num"><b class="${g.pess.profitPer100Clicks < 0 ? 'down' : ''}">${rub(g.pess.profitPer100Clicks)}</b></td><td class="num"><b class="${g.base.profitPer100Clicks < 0 ? 'down' : ''}">${rub(g.base.profitPer100Clicks)}</b></td><td class="num"><b>${rub(g.opt.profitPer100Clicks)}</b></td></tr>
+        <tr><td>Заказ с рекламы стоит</td><td class="num">${rub(g.pess.costPerOrder)}</td><td class="num">${rub(g.base.costPerOrder)}</td><td class="num">${rub(g.opt.costPerOrder)}</td></tr>
+        <tr><td>${term('Доля маржи на рекламу')}</td><td class="num">${pct(g.pess.adShareOfMarginPct, 0)}</td><td class="num">${pct(g.base.adShareOfMarginPct, 0)}</td><td class="num">${pct(g.opt.adShareOfMarginPct, 0)}</td></tr>
+      </tbody></table>
+      ${b ? `<h3>Сколько закладывать в день</h3><div class="table-wrap"><table class="data compact"><thead><tr><th class="num">Бюджет в день</th><th class="num">Кликов</th><th class="num">Худший: заказы · прибыль</th><th class="num">Ожидаемый</th><th class="num">Лучший</th><th class="num">Остатка хватит</th></tr></thead><tbody>
+        ${b.rows.map((r) => `<tr><td class="num">${rub(r.budget)}</td><td class="num">${n(r.clicks)}</td><td class="num">${pr(r.pess)}</td><td class="num">${pr(r.base)}</td><td class="num">${pr(r.opt)}</td><td class="num">${r.stockDays != null ? `~${n(r.stockDays)} дн.` : '—'}</td></tr>`).join('')}
+      </tbody></table></div><p class="small muted">Если WB продаст столько кликов при этой цене — зависит от спроса и конкурентов, видно только по факту.</p>` : ''}
+      ${l.test ? `<p class="ok-line small"><b>План проверки:</b> ставка до ${n(l.bids.safe ?? l.planBid, 1)} ₽, первые ${n(l.test.clicks)} кликов ≈ <b>${rub(l.test.spend)}</b> — это максимум риска. Если за 100 кликов будет хотя бы <b>${n(l.test.needOrders)}</b> заказ(а) (конверсия от ${pct(l.test.needCrPct, 1)}) — продолжать; меньше — снизить ставку или остановить и чинить карточку.</p>` : ''}
+      ` : '<p class="muted">Прогноз не посчитать: не хватает данных (см. выше).</p>'}
+    </details>`;
+  }
+
   async function viewAds(params) {
     setActiveTab('ads');
     $app.innerHTML = '<p class="muted">Загрузка…</p>';
     const d = await api('ads');
     const focus = Number(params.get('c')) || null;
     const items = focus ? [...d.items.filter((x) => x.campaign.advertId === focus), ...d.items.filter((x) => x.campaign.advertId !== focus)] : d.items;
+    const launchBlock = (d.launch || []).length
+      ? `<h2 class="section-title">Прогноз запуска рекламы — товары без кампании</h2>
+         <p class="muted small">Для каждого отслеживаемого товара без рекламы: какую ставку поставить, чтобы не уйти в минус, и что это даст. Нажмите на товар, чтобы раскрыть.</p>
+         ${d.launch.map((l) => launchHtml(l, { targetDrrPct: d.targetDrrPct })).join('')}`
+      : '';
     if (!items.length) {
       $app.innerHTML = `<h1>Реклама</h1><div class="panel"><p>Рекламных кампаний пока не видно.</p>
         <p class="muted">Кампании подтягиваются из кабинета WB при каждом сборе данных (сами, раз в час; «Обновить сейчас» — если нужно немедленно). Нужна категория токена «Продвижение».
-        Товары с действующей рекламой отслеживаются автоматически, даже без галочки «Воронка WB».</p></div>`;
+        Товары с действующей рекламой отслеживаются автоматически, даже без галочки «Воронка WB».</p></div>${launchBlock}`;
       return;
     }
     const r1 = (v, dgt = 1) => n(v, dgt);
@@ -832,6 +876,7 @@
           </details>
         </section>`;
       }).join('')}
+      ${launchBlock}
       <details class="panel glossary"><summary><b>Шпаргалка: что значат показатели рекламы</b></summary>
         <p class="small muted">Цепочка: показы → CTR → клики → CR → заказы. Затраты = клики × CPC. CPO = затраты ÷ заказы — сравнивайте с прибылью с заказа. Остальное подсказывает, где чинить.</p>
         <table class="data compact"><tbody>${['Показы', 'Клики', 'CTR', 'CPC', 'CPM', 'Корзины', 'Заказы', 'CR', 'Затраты', 'CPO', 'CPS', 'Сумма заказов', 'ДРР', 'ROAS', 'Позиция', 'Ставка', 'Безубыточная ставка']
