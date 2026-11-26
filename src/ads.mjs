@@ -90,9 +90,11 @@ export function adEconomics(inputs) {
     adShareOfMarginPct: costPerOrder != null && profitPerOrder > 0 ? round((costPerOrder / profitPerOrder) * 100, 0) : null,
     breakEvenCpc: round(breakEvenCpc, 2),
     targetCpc: round(targetCpc, 2),
-    // Какую ставку ставить в кабинете, чтобы цена клика была безубыточной / под цель (с учётом доли списания)
-    breakEvenBid: round(bidForCpc(inputs, breakEvenCpc), inputs.paymentType === 'cpm' ? 0 : 1),
-    targetBid: round(bidForCpc(inputs, targetCpc), inputs.paymentType === 'cpm' ? 0 : 1),
+    // Какую ставку ставить в кабинете. Считаем, что WB спишет всю ставку: доля списания (аукцион второй цены)
+    // известна только для нынешней ставки, при другой ставке она может быть любой — но никогда больше ставки.
+    // Так совет «до N ₽» гарантированно не уводит в минус, а фактическое списание ниже — ваш запас.
+    breakEvenBid: round(bidForCpc({ ...inputs, chargeRatio: 1 }, breakEvenCpc), inputs.paymentType === 'cpm' ? 0 : 1),
+    targetBid: round(bidForCpc({ ...inputs, chargeRatio: 1 }, targetCpc), inputs.paymentType === 'cpm' ? 0 : 1),
     perDay,
   };
 }

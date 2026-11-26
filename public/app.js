@@ -717,7 +717,7 @@
           <li><span class="tag green">до ${bidCell(g.pess.breakEvenBid)}</span> безопасно: в плюс даже в худшем варианте</li>
           <li><span class="tag">${bidCell(g.pess.breakEvenBid)} … ${bidCell(e.breakEvenBid)}</span> в плюс при ожидаемой конверсии, но риск уйти в минус</li>
           <li><span class="tag red">выше ${bidCell(e.breakEvenBid)}</span> в минус при ожидаемой конверсии</li>
-          <li class="small muted">Сейчас ставка ${bidCell(it.inputs.bid)}, WB списывает ${n(it.inputs.chargeRatio * 100, 0)}% ставки (${esc(it.inputs.chargeSource)}).</li>
+          <li class="small muted">Ставки посчитаны так, будто WB спишет всю ставку: при другой ставке доля списания неизвестна, но больше ставки WB не берёт. Сейчас при ставке ${bidCell(it.inputs.bid)} WB списывает ${n(it.inputs.chargeRatio * 100, 0)}% (${esc(it.inputs.chargeSource)}) — это ваш дополнительный запас.</li>
         </ul>
         ${b ? `<h3>Сколько закладывать в день</h3>
         <div class="table-wrap"><table class="data compact"><thead><tr><th class="num">Бюджет в день</th><th class="num">Кликов</th><th class="num">Худший: заказы · прибыль</th><th class="num">Ожидаемый</th><th class="num">Лучший</th><th class="num">Остатка хватит</th></tr></thead><tbody>
