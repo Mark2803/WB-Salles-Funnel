@@ -190,7 +190,7 @@
   });
 
   function showTextModal(text) {
-    $app.insertAdjacentHTML('afterbegin', `<div class="panel" id="exportBox"><h3>Сводка для Claude</h3><p class="muted">Скопируйте текст ниже и вставьте в чат.</p><textarea id="exportText" rows="14"></textarea></div>`);
+    $app.insertAdjacentHTML('afterbegin', `<div class="panel" id="exportBox"><h3>Сводка для ИИ</h3><p class="muted">Текст уже выделен: скопируйте его и вставьте в чат с ИИ. Сам он никуда не отправляется.</p><textarea id="exportText" rows="14"></textarea></div>`);
     const ta = document.getElementById('exportText');
     ta.value = text;
     ta.select();

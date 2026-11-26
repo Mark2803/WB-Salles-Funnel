@@ -1,4 +1,4 @@
-// «Сводка для Claude»: текст в Markdown, который можно вставить в чат и обсуждать стратегию на живых цифрах.
+// «Отправить сводку ИИ»: текст в Markdown, который можно вставить в чат и обсуждать стратегию на живых цифрах.
 import { addDays, todayMsk } from './dates.mjs';
 import { overview } from './metrics.mjs';
 import { getStrategy, planVsFact } from './strategies.mjs';
