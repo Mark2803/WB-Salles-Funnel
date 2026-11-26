@@ -4,7 +4,7 @@ import { overview } from './metrics.mjs';
 import { getStrategy, planVsFact } from './strategies.mjs';
 import { adsOverview } from './ads.mjs';
 
-const fmt = (v, suffix = '') => (v == null ? '—' : `${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}${suffix}`);
+const fmt = (v, suffix = '') => (v == null ? '—' : Object.is(v, -0) ? `0${suffix}` : `${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}${suffix}`);
 
 export function buildClaudeSummary(db, settings, today = todayMsk()) {
   const items = overview(db, settings, today);
@@ -18,7 +18,7 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   for (const p of items) {
     const w = p.week;
     lines.push(
-      `| ${p.nmId} | ${p.title || p.vendorCode || ''} | ${fmt(p.snapshot.seller_price)} | ${fmt(p.snapshot.stocks_wb)}${p.stockDays != null ? ` (~${p.stockDays} дн.)` : ''} | ${fmt(w.open)} (${fmt(p.changes.open, '%')}) | ${fmt(w.cart)} | ${fmt(w.orders)} (${fmt(p.changes.orders, '%')}) | ${fmt(w.buyouts)} | ${fmt(w.cartConv, '%')} | ${fmt(w.orderConv, '%')} | ${fmt(w.ads.spend)} | ${fmt(w.ads.drr, '%')} | ${fmt(p.weekMargin)} | ${fmt(p.adShareOfMarginPct, '%')} | ${fmt(p.weekProfit)} | ${fmt(p.snapshot.feedback_rating)} |`,
+      `| ${p.nmId} | ${p.title || p.vendorCode || ''} | ${fmt(p.snapshot.seller_price)} | ${fmt(p.snapshot.stocks_wb)}${p.stockDays != null ? ` (~${p.stockDays} дн.)` : ''} | ${fmt(w.open)} (${fmt(p.changes.open, '%')}) | ${fmt(w.cart)} | ${fmt(w.orders)} (${fmt(p.changes.orders, '%')}) | ${fmt(w.buyouts)} | ${fmt(w.cartConv, '%')} | ${fmt(w.orderConv, '%')} | ${fmt(w.ads.spend)} | ${fmt(w.ads.drr, '%')} | ${fmt(p.weekMargin)} | ${fmt(p.adShareOfMarginPct, '%')} | ${fmt(p.weekProfit)} | ${p.snapshot.feedback_rating ? fmt(p.snapshot.feedback_rating) : 'нет отзывов'} |`,
     );
   }
   lines.push('');

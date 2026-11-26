@@ -139,7 +139,7 @@ export function costInputs(db, nmId, today = todayMsk()) {
     // Сколько дней штука лежит до продажи: остаток ÷ продажи в день (заказы за 14 дней × выкуп)
     const m = periodMetrics(db, nmId, addDays(today, -13), today);
     const snap = latestSnapshot(db, nmId);
-    const buyout = m.buyoutPct != null ? m.buyoutPct / 100 : 1;
+    const buyout = m.buyoutPct > 0 ? m.buyoutPct / 100 : 1;
     const salesPerDay = (m.orders / 14) * buyout;
     const days = snap.stocks_wb != null && salesPerDay > 0 ? snap.stocks_wb / salesPerDay : null;
     storage = {
@@ -151,6 +151,13 @@ export function costInputs(db, nmId, today = todayMsk()) {
     };
   }
   const m30 = periodMetrics(db, nmId, addDays(today, -29), today);
+  // Выкуп: аналитика WB (если уже есть выкупы) → финотчёт товара → финотчёт магазина. 0% у нового товара — «выкупов ещё нет», а не «никто не выкупает».
+  const ownFin = own?.buyoutPct != null ? own : actualCosts(db, nmId, today, 90, 1);
+  const shopFin = shop || actualCosts(db, null, today, 90, 10);
+  const buyoutPick = m30.buyoutPct > 0 ? { pct: m30.buyoutPct, source: 'аналитика WB за 30 дней' }
+    : ownFin?.buyoutPct != null ? { pct: ownFin.buyoutPct, source: `финотчёт WB по товару: продано ÷ доставлено (${ownFin.deliveries} доставок)` }
+    : shopFin?.buyoutPct != null ? { pct: shopFin.buyoutPct, source: `финотчёт WB по всему магазину: продано ÷ доставлено (${shopFin.deliveries} доставок) — у товара ещё нет выкупов` }
+    : null;
   return {
     liters: liters != null ? round(liters, 3) : null,
     commission,
@@ -158,8 +165,8 @@ export function costInputs(db, nmId, today = todayMsk()) {
     logistics,
     storage,
     fact: fact ? { logisticsPerSold: fact.logisticsPerSold, storagePerSold: fact.storagePerSold + fact.acceptancePerSold, label: factLabel, logisticsPerDelivery: fact.logisticsPerDelivery } : null,
-    buyoutPct: m30.buyoutPct ?? null,
-    buyoutSource: m30.buyoutPct != null ? 'аналитика WB за 30 дней' : null,
+    buyoutPct: buyoutPick?.pct ?? null,
+    buyoutSource: buyoutPick?.source ?? null,
   };
 }
 
@@ -207,9 +214,13 @@ export function actualCosts(db, nmId, today = todayMsk(), days = 90, minSold = 3
   const saleRetail = sum('retail_price_disc', isSale);
   const saleForPay = sum('for_pay', isSale);
   const delivery = sum('delivery', (l) => !isOutlier(l));
+  const deliveries = sum('delivery_amount');
   return {
     soldUnits: net,
     days,
+    // Выкуп по финотчёту: продано ÷ доставлено покупателям (нужно хотя бы 5 доставок)
+    buyoutPct: deliveries >= 5 ? Math.min(100, (sold / deliveries) * 100) : null,
+    deliveries,
     // Фактическая комиссия WB: сколько от цены продажи не дошло до вас (включая эквайринг)
     commissionPct: saleRetail > 0 && saleForPay > 0 ? (1 - saleForPay / saleRetail) * 100 : median(lines.filter(isSale).map((l) => l.commission_pct).filter((x) => x > 0)),
     commissionIncludesAcquiring: saleRetail > 0 && saleForPay > 0,
@@ -449,13 +460,14 @@ export function baselineFor(db, nmId, settings, today = todayMsk()) {
     adSpendPerDay: round(m.ads.spend / 14, 0),
     cartConv: enough ? m.cart / m.open : 0.12,
     orderConv: enough && m.cart ? m.orders / m.cart : 0.5,
-    buyoutPct: m.buyoutPct != null ? m.buyoutPct / 100 : 1,
-    buyoutKnown: m.buyoutPct != null,
+    ...(() => {
+      const ci = costInputs(db, nmId, today);
+      return { costInputs: ci, buyoutPct: ci.buyoutPct != null ? ci.buyoutPct / 100 : 1, buyoutKnown: ci.buyoutPct != null };
+    })(),
     price: snap.seller_price ?? null,
     cost: product?.cost_per_unit ?? null,
     actual,
     tariff,
-    costInputs: costInputs(db, nmId, today),
     ordersPerDay: round(m.orders / 14, 2),
   };
 }
