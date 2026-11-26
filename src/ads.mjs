@@ -15,7 +15,7 @@ import { nowIso } from './db.mjs';
 import { periodMetrics, productSummary } from './metrics.mjs';
 import { LIVE_STATUSES } from './wb/collect.mjs';
 import { effectiveStatus } from './campaign-status.mjs';
-import { wilson } from './stats.mjs';
+import { decayedRate, wilson } from './stats.mjs';
 
 const round = (v, d = 1) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 const div = (a, b) => (b ? a / b : null);
@@ -192,7 +192,7 @@ export function compareForecast(forecast, fact) {
 }
 
 /** Советы с числами: что сделать по кампании. */
-export function adRecommendations({ econ, fact, inputs, recommended, organicCr, stockDays, settings }) {
+export function adRecommendations({ econ, range = null, fact, inputs, recommended, organicCr, stockDays, settings }) {
   const out = [];
   const add = (level, text) => out.push({ level, text });
   const r1 = (v) => (v == null ? '—' : String(round(v, 1)).replace('.', ','));
@@ -211,18 +211,32 @@ export function adRecommendations({ econ, fact, inputs, recommended, organicCr, 
     add('info', `Пока ${clicks} кликов — конверсия рекламы ещё случайна. Надёжные выводы — примерно после ${MIN_CLICKS_FOR_CR} кликов${daysLeft ? ` (ещё ~${daysLeft} дн. при текущем темпе)` : ''}. До этого расчёт идёт по конверсии ${inputs.crSource}.`);
   }
   const enough = clicks >= MIN_CLICKS_FOR_CR;
-  const factDrr = enough ? fact.drrPct : null;
   if (enough && fact.orders === 0) {
     add('critical', `${clicks} кликов и ни одного заказа, потрачено ${money(fact.spend)}. Остановите кампанию или снизьте ставку и проверьте карточку: цену, фото, отзывы и по каким запросам идут показы.`);
   }
-  if (econ.breakEvenDrrPct != null && factDrr != null && factDrr > econ.breakEvenDrrPct) {
-    add('critical', `Реклама в минус: ДРР ${r1(factDrr)}% больше всей прибыли с заказа (${r1(econ.breakEvenDrrPct)}% от цены). Заказ с рекламы стоит ${money(fact.costPerOrder)}, а прибыль с заказа до рекламы — ${money(econ.profitPerOrder)}. Снизьте ${bidLabel} до ${bidFmt(econ.breakEvenBid)} (безубыточно при конверсии ${r1(econ.cr)}%) или поднимите конверсию карточки.`);
-  } else if (factDrr != null && factDrr > settings.targetDrrPct) {
-    add('warning', `ДРР ${r1(factDrr)}% выше цели ${settings.targetDrrPct}%. Чтобы выйти на цель при нынешней конверсии ${r1(econ.cr)}%, ${bidLabel} — не выше ${bidFmt(econ.targetBid)}.`);
-  } else if (factDrr != null && factDrr < settings.targetDrrPct * 0.7) {
-    const limitedByBudget = inputs.dailyBudget && fact.perDay && fact.perDay.spend >= inputs.dailyBudget * 0.9;
-    if (limitedByBudget) add('good', `Реклама окупается с запасом (ДРР ${r1(factDrr)}% при цели ${settings.targetDrrPct}%), а дневной бюджет (${money(inputs.dailyBudget)}) расходуется почти полностью — увеличьте его на 30–50%, чтобы получить больше заказов.`);
-    else add('good', `Реклама окупается с запасом (ДРР ${r1(factDrr)}% при цели ${settings.targetDrrPct}%). Можно поднять ${bidLabel} до ${bidFmt(econ.targetBid)}: показов и заказов станет больше, ДРР — около цели.`);
+  // Решение по диапазону (как в системах управления ставками): сравниваем цену клика с безубыточной
+  // в худшем и лучшем варианте. Пересчитывается при каждом сборе, по свежим данным.
+  const g = range && range.pess ? range : null;
+  if (g && econ.profitPerOrder != null && econ.cpc != null) {
+    const safe = g.pess.breakEvenBid;
+    const beCr = econ.profitPerOrder > 0 ? econ.cpc / econ.profitPerOrder : null; // конверсия, нужная для работы в ноль
+    const budgetLimited = inputs.dailyBudget && fact?.perDay && fact.perDay.spend >= inputs.dailyBudget * 0.9;
+    const step = 100;
+    const more = (e, crv) => (e?.profitPerOrderAfterAds != null && crv != null ? (step / econ.cpc) * crv * e.profitPerOrderAfterAds : null);
+    if (g.opt.profitPerOrderAfterAds != null && g.opt.profitPerOrderAfterAds < 0) {
+      add('critical', `Реклама в минус даже в лучшем варианте: при цене клика ${r1(econ.cpc)} ₽ нужна конверсия не ниже ${beCr != null ? r1(beCr * 100) : '—'}%, а у кампании она не выше ${r1(inputs.crHigh * 100)}%. Снизьте ${bidLabel} до ${bidFmt(safe)} или остановите кампанию и проверьте карточку.`);
+    } else if (g.pess.profitPerOrderAfterAds != null && g.pess.profitPerOrderAfterAds > 0) {
+      let t = `Реклама в плюс даже в худшем варианте: с каждого заказа после рекламы остаётся от ${money(g.pess.profitPerOrderAfterAds)} до ${money(g.opt.profitPerOrderAfterAds)}.`;
+      if (budgetLimited) t += ` Дневной бюджет (${money(inputs.dailyBudget)}) уходит полностью — его можно поднять: каждые +${step} ₽ в день ≈ +${Math.round(step / econ.cpc)} кликов и +${money(more(g.pess, inputs.crLow))}…${money(more(g.opt, inputs.crHigh))} прибыли в день (если WB продаст столько кликов — это видно по факту через 1–2 дня).`;
+      if (safe != null && inputs.bid != null && inputs.bid < safe * 0.9) t += ` ${bidLabel[0].toUpperCase()}${bidLabel.slice(1)} можно поднять до ${bidFmt(safe)} — это безопасно даже при худшей конверсии; показов станет больше.`;
+      add('good', t);
+    } else if (econ.profitPerOrderAfterAds != null && econ.profitPerOrderAfterAds > 0) {
+      const p = inputs.cr;
+      const need = beCr != null && p > beCr ? Math.ceil((1.645 ** 2 * p * (1 - p)) / ((p - beCr) ** 2)) : null;
+      add('info', `Скорее в плюс (при ожидаемой конверсии ${r1(p * 100)}% с заказа остаётся ${money(econ.profitPerOrderAfterAds)}), но не наверняка: в худшем варианте ${money(g.pess.profitPerOrderAfterAds)}. Чтобы не рисковать — ${bidLabel} не выше ${bidFmt(safe)}.${need && need > clicks ? ` Ясно станет примерно после ${need} кликов (сейчас ${clicks}).` : ''}`);
+    } else if (econ.profitPerOrderAfterAds != null) {
+      add('warning', `Скорее в минус: при ожидаемой конверсии ${r1(inputs.cr * 100)}% заказ с рекламы стоит ${money(econ.costPerOrder)}, а маржа с заказа ${money(econ.profitPerOrder)}. Снизьте ${bidLabel} до ${bidFmt(safe ?? econ.breakEvenBid)} или проверьте карточку.`);
+    }
   }
   if (fact && fact.views >= MIN_VIEWS_FOR_CTR && fact.ctr != null && fact.ctr < 1.5) {
     add('warning', `CTR ${r1(fact.ctr)}% — карточку редко выбирают из выдачи. Ставка тут не поможет: сначала главное фото, название и цена.`);
@@ -287,24 +301,24 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
   const organic = periodMetrics(db, nmId, addDays(today, -29), today);
   const organicCr = organic.open >= 100 ? organic.orders / organic.open : null;
 
-  let cr;
+  // Конверсия клика в заказ — подстраивается под спрос: свежие дни рекламы весят больше (полураспад 7 дней),
+  // а пока кликов мало, оценку поддерживает конверсия самой карточки за 30 дней (как будто 50 кликов).
+  const daily = db
+    .prepare(`SELECT date, SUM(clicks) clicks, SUM(orders) orders FROM ads_daily WHERE advert_id = ? AND (nm_id = ? OR ?) AND date BETWEEN ? AND ? GROUP BY date`)
+    .all(campaign.advertId, nmId, withOthers ? 1 : 0, from, today);
+  const priorCr = organic.open >= 50 ? organic.orders / organic.open : null;
+  const est = decayedRate(daily, today, { prior: priorCr });
+  let cr = est ? est.rate : null;
+  let crLow = est ? est.low : null;
+  let crHigh = est ? est.high : null;
+  const pctTxt = (v) => String(round(v * 100, 1)).replace('.', ',');
   let crSource;
-  let crCounts = null; // из скольких кликов (переходов) сколько заказов — для диапазона
-  if (fact.clicks >= MIN_CLICKS_FOR_CR) {
-    cr = fact.orders / fact.clicks;
-    crCounts = [fact.orders, fact.clicks];
-    crSource = `рекламы (факт: ${fact.orders} заказов из ${fact.clicks} кликов${fact.otherOrders ? `, из них ${fact.otherOrders} — другие ваши товары` : ''})`;
-  } else if (organicCr) {
-    cr = organicCr;
-    crCounts = [organic.orders, organic.open];
-    crSource = `карточки за 30 дней (${organic.orders} заказов из ${organic.open} переходов)`;
-  } else if (fact.clicks > 0) {
-    cr = fact.orders / fact.clicks;
-    crCounts = [fact.orders, fact.clicks];
-    crSource = `рекламы, но данных мало (${fact.orders} заказов из ${fact.clicks} кликов) — цифра случайна`;
-  } else {
-    cr = null;
-    crSource = 'нет данных: у кампании ещё нет кликов, а у карточки меньше 100 переходов за 30 дней';
+  if (!est) crSource = 'нет данных: у кампании ещё нет кликов, а у карточки меньше 50 переходов за 30 дней';
+  else if (est.clicks === 0) crSource = `пока только конверсия карточки за 30 дней: ${organic.orders} заказов из ${organic.open} переходов`;
+  else {
+    crSource = `реклама: ${est.orders} заказов из ${est.clicks} кликов${fact.otherOrders ? ` (из них ${fact.otherOrders} — другие ваши товары)` : ''}, свежие дни весомее`;
+    if (est.priorUsed) crSource += `; плюс конверсия карточки ${pctTxt(priorCr)}% (${organic.orders} из ${organic.open} переходов) с весом 50 кликов${est.clicks < 300 ? ' — пока своих кликов мало, она не даёт оценке прыгать' : ''}`;
+    if (est.clicks < MIN_CLICKS_FOR_CR) crSource += ' — данных мало, диапазон широкий';
   }
   let ctr;
   let ctrSource;
@@ -354,10 +368,8 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
     ctrSource,
     cr,
     crSource,
-    ...(() => {
-      const w = crCounts ? wilson(crCounts[0], crCounts[1]) : null;
-      return { crLow: w ? round(w.low, 4) : null, crHigh: w ? round(w.high, 4) : null };
-    })(),
+    crLow: crLow != null ? round(crLow, 4) : null,
+    crHigh: crHigh != null ? round(crHigh, 4) : null,
     dailyBudget: dailyBudget ? round(dailyBudget, 0) : null,
     budgetSource,
     price,
@@ -499,7 +511,7 @@ export function adsOverview(db, settings, today = todayMsk()) {
         comparison: current ? compareForecast(current.forecast, factSinceForecast) : null,
         factSinceForecast,
         scenarios: bidScenarios(inputs, { extraBids: [econ.breakEvenBid, econ.targetBid, recommended?.competitive].filter(Boolean) }),
-        recommendations: adRecommendations({ econ, fact, inputs, recommended, organicCr, stockDays: summary.stockDays, settings }),
+        recommendations: adRecommendations({ econ, range, fact, inputs, recommended, organicCr, stockDays: summary.stockDays, settings }),
       });
     }
   }

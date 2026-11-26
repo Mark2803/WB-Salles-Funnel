@@ -380,3 +380,14 @@ test('выкуп из аналитики WB: свой при ≥10 заверш�
   assert.ok(shop.low < shop.pct && shop.high > shop.pct);
   db.close();
 });
+
+test('конверсия подстраивается: свежие дни весомее, при малом числе кликов помогает конверсия карточки', async () => {
+  const { decayedRate } = await import('../src/stats.mjs');
+  // 2 недели назад конверсия была 10%, последние дни — 2%: оценка ближе к свежей
+  const rows = [{ date: '2026-11-12', clicks: 100, orders: 10 }, { date: '2026-11-25', clicks: 100, orders: 2 }];
+  const est = decayedRate(rows, '2026-11-26');
+  assert.ok(est.rate < 0.045, `оценка ${est.rate}`);
+  // 10 кликов без заказов, но карточка конвертирует 4%: оценка не ноль
+  const small = decayedRate([{ date: '2026-11-25', clicks: 10, orders: 0 }], '2026-11-26', { prior: 0.04 });
+  assert.ok(small.rate > 0.025 && small.rate < 0.04);
+});

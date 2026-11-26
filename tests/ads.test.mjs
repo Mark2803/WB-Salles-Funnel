@@ -1,7 +1,8 @@
+import { wilson } from '../src/stats.mjs';
 // Экономика рекламы: формулы, сценарии ставок, сравнение прогноза с фактом, советы, сбор с тестового WB.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adEconomics, adRecommendations, bidScenarios, compareForecast, effectiveCpc, bidForCpc } from '../src/ads.mjs';
+import { adRange, adEconomics, adRecommendations, bidScenarios, compareForecast, effectiveCpc, bidForCpc } from '../src/ads.mjs';
 
 test('цена клика: за клик с аукционом второй цены и за показы', () => {
   assert.equal(effectiveCpc({ paymentType: 'cpc', bid: 9, chargeRatio: 0.46 }), 9 * 0.46);
@@ -46,17 +47,28 @@ test('прогноз против факта и советы', () => {
   const drr = cmp.find((r) => r.key === 'drr');
   assert.equal(drr.plan, 15.6);
   assert.equal(drr.good, false);
+  const w = wilson(fact.orders, fact.clicks);
+  const inp = { paymentType: 'cpc', bid: 6, status: 9, profitPerUnit: 400, crSource: 'рекламы', cr: fact.orders / fact.clicks, crLow: w.low, crHigh: w.high, price: 1280, buyoutPct: 90, targetDrrPct: 10 };
+  const range = adRange(inp);
   const recs = adRecommendations({
-    econ: adEconomics({ paymentType: 'cpc', bid: 6, cr: fact.orders / fact.clicks, price: 1280, profitPerUnit: 400, buyoutPct: 90, targetDrrPct: 10 }),
+    econ: range.base,
+    range,
     fact,
-    inputs: { paymentType: 'cpc', bid: 6, status: 9, profitPerUnit: 400, crSource: 'рекламы' },
+    inputs: inp,
     recommended: null,
     organicCr: 0.04,
     stockDays: 30,
     settings: { targetDrrPct: 10, minStockDays: 14 },
   });
-  assert.equal(recs[0].level, 'critical');
-  assert.match(recs[0].text, /Реклама в минус/);
+  // 4 заказа из 350 кликов: ожидаемо в минус, но в лучшем варианте ещё может окупиться
+  assert.equal(recs[0].level, 'warning');
+  assert.match(recs[0].text, /Скорее в минус/);
+  // те же клики без единого заказа — в минус даже в лучшем варианте
+  const w0 = wilson(0, 350);
+  const inp0 = { ...inp, cr: 0.0001, crLow: w0.low, crHigh: w0.high };
+  const r0 = adRange(inp0);
+  const recs0 = adRecommendations({ econ: r0.base, range: r0, fact: { ...fact, orders: 0 }, inputs: inp0, recommended: null, organicCr: null, stockDays: 30, settings: { targetDrrPct: 10, minStockDays: 14 } });
+  assert.ok(recs0.some((r) => r.level === 'critical' && /даже в лучшем/.test(r.text)));
   assert.ok(recs.some((r) => /минус-фразы/.test(r.text)));
 });
 
