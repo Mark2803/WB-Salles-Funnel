@@ -134,6 +134,11 @@ export function createMockClient({ nmIds, today = todayMsk() }) {
           currency: 'RUB',
         }));
       }
+      if (path === '/api/analytics/v3/sales-funnel/products' && body.nmIds.length === 0) {
+        // Все карточки магазина: выкуп за закрытый период
+        const ids = [101, 102, 103, 104, 105];
+        return { data: { products: body.offset ? [] : ids.map((nmId, i) => ({ product: { nmId, vendorCode: `SKU-${nmId}` }, statistic: { selected: { orderCount: [40, 12, 30, 200, 5][i], buyoutCount: [30, 9, 21, 170, 4][i], cancelCount: [8, 3, 7, 25, 1][i] } } })) } };
+      }
       if (path === '/api/analytics/v3/sales-funnel/products') {
         return {
           data: {

@@ -31,12 +31,13 @@ const STEPS = {
   tariffs: { label: 'Тарифы WB: комиссия, логистика, хранение', fn: collect.collectTariffs },
   feedbacks: { label: 'Отзывы', fn: collect.collectFeedbacks },
   finance: { label: 'Финансовый отчёт', fn: collect.collectFinance },
+  buyouts: { label: 'Выкуп по всем товарам магазина (аналитика WB)', fn: collect.collectBuyouts },
   search: { label: 'Поиск и позиции («Джем»)', fn: collect.collectSearch },
 };
 
 // Реклама — первой: товары с действующей рекламой добавляются в отслеживаемые и попадают в остальные шаги
 export const QUICK = ['ads', 'funnel', 'summary', 'prices', 'costs'];
-export const FULL = ['ads', 'funnel', 'summary', 'prices', 'costs', 'dimensions', 'stocksWh', 'tariffs', 'feedbacks', 'finance', 'search'];
+export const FULL = ['ads', 'funnel', 'summary', 'prices', 'costs', 'dimensions', 'stocksWh', 'tariffs', 'buyouts', 'feedbacks', 'finance', 'search'];
 
 /** Товары из действующих рекламных кампаний (готова к запуску, активна, на паузе). */
 export function campaignNmIds(db) {

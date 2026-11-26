@@ -4,6 +4,7 @@ import { overview } from './metrics.mjs';
 import { getStrategy, planVsFact } from './strategies.mjs';
 import { adsOverview } from './ads.mjs';
 
+const round1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
 const fmt = (v, suffix = '') => (v == null ? '—' : Object.is(v, -0) ? `0${suffix}` : `${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}${suffix}`);
 
 export function buildClaudeSummary(db, settings, today = todayMsk()) {
@@ -26,7 +27,7 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   for (const p of items) {
     const u = p.unit;
     lines.push(
-      `- ${p.nmId}: цена ${fmt(u.price, ' ₽')}, себестоимость ${fmt(u.cost, ' ₽')}, комиссия ${fmt(u.commissionPct, '%')}, налог ${fmt(u.taxPct, '%')}, логистика на продажу ${fmt(u.logisticsPerSold, ' ₽')}, хранение на продажу ${fmt(u.storagePerSold, ' ₽')}, выкуп ${fmt(u.buyoutPct, '%')}, маржа (прибыль с продажи до рекламы) ${fmt(u.profitPerUnit, ' ₽')} = ${fmt(u.marginPct, '%')} от цены, безубыточность ${fmt(u.breakEvenPrice, ' ₽')}, рабочая реклама на продажу ${fmt(u.workAdPerSale, ' ₽')}. Источники — комиссия: ${u.commissionSource}; логистика: ${u.logisticsSource}; хранение: ${u.storageSource}.${u.missing?.length ? ` Расчёт неполный: нет ${u.missing.join(', ')}.` : ''}`,
+      `- ${p.nmId}: цена ${fmt(u.price, ' ₽')}, себестоимость ${fmt(u.cost, ' ₽')}, комиссия ${fmt(u.commissionPct, '%')}, налог ${fmt(u.taxPct, '%')}, логистика на продажу ${fmt(u.logisticsPerSold, ' ₽')}, хранение на продажу ${fmt(u.storagePerSold, ' ₽')}, выкуп ${fmt(u.buyoutPct, '%')}${u.buyoutLow != null ? ` (диапазон ${fmt(u.buyoutLow)}…${fmt(u.buyoutHigh, '%')})` : ''}, маржа (прибыль с продажи до рекламы) ${fmt(u.profitPerUnit, ' ₽')} = ${fmt(u.marginPct, '%')} от цены, безубыточность ${fmt(u.breakEvenPrice, ' ₽')}, рабочая реклама на продажу ${fmt(u.workAdPerSale, ' ₽')}. Источники — выкуп: ${u.buyoutSource || '—'}; комиссия: ${u.commissionSource}; логистика: ${u.logisticsSource}; хранение: ${u.storageSource}.${u.missing?.length ? ` Расчёт неполный: нет ${u.missing.join(', ')}.` : ''}`,
     );
   }
   lines.push('');
@@ -48,6 +49,13 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
     const e = a.economics;
     const f = a.fact;
     lines.push(`- ${a.nmId} «${c.name}» (${c.paymentLabel}, ${c.statusLabel}): ставка ${fmt(a.inputs.bid)} ₽, цена клика ${fmt(e.cpc)} ₽, бюджет в день ${fmt(a.inputs.dailyBudget, ' ₽')}. Факт с ${f.from}: показы ${fmt(f.views)}, клики ${fmt(f.clicks)}, CTR ${fmt(f.ctr, '%')}, заказы ${fmt(f.orders)}, расход ${fmt(f.spend, ' ₽')}, ДРР ${fmt(f.drrPct, '%')}. Расчёт: конверсия ${fmt(e.cr, '%')} (${a.inputs.crSource}), ДРР ${fmt(e.drrPct, '%')}, прибыль с заказа после рекламы ${fmt(e.profitPerOrderAfterAds, ' ₽')}, реклама съедает ${fmt(e.adShareOfMarginPct, '%')} маржи, безубыточная ставка ${fmt(e.breakEvenBid)}, ставка под цель ${fmt(e.targetBid)}.`);
+    const g = a.range;
+    if (g) {
+      lines.push(`  - Коридор (90%): конверсия ${fmt(round1(g.crLow * 100))}…${fmt(round1(g.crHigh * 100), '%')}, выкуп ${fmt(g.buyoutLow)}…${fmt(g.buyoutHigh, '%')}. Прибыль с заказа после рекламы: худший ${fmt(g.pess.profitPerOrderAfterAds, ' ₽')}, ожидаемый ${fmt(e.profitPerOrderAfterAds, ' ₽')}, лучший ${fmt(g.opt.profitPerOrderAfterAds, ' ₽')}. Безубыточная ставка: худший ${fmt(g.pess.breakEvenBid)}, ожидаемый ${fmt(e.breakEvenBid)}, лучший ${fmt(g.opt.breakEvenBid)}. Безопасно (в плюс даже в худшем) — ставка до ${fmt(g.pess.breakEvenBid)}.`);
+    }
+    if (a.budget) {
+      lines.push(`  - Бюджет в день при нынешней ставке (клик ${fmt(a.budget.cpc)} ₽): ${a.budget.rows.map((r) => `${r.budget} ₽ → ${fmt(r.clicks)} кликов, заказов ${fmt(r.pess?.orders)}…${fmt(r.opt?.orders)}, прибыль ${fmt(r.pess?.profit)}…${fmt(r.opt?.profit)} ₽/день`).join('; ')}.${a.budget.test ? ` До надёжной конверсии ещё ${a.budget.test.clicks} кликов ≈ ${a.budget.test.spend} ₽.` : ''}`);
+    }
     for (const r of a.recommendations) lines.push(`  - ${r.text}`);
   }
   lines.push('');

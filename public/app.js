@@ -47,7 +47,7 @@
     ROAS: { text: 'Окупаемость рекламы: сколько рублей заказов на 1 рубль рекламы. ROAS = сумма заказов ÷ затраты = 100 ÷ ДРР.', act: 'То же, что ДРР, только наоборот: больше — лучше.' },
     'Позиция': { text: 'Место карточки в выдаче по рекламным запросам. API WB для рекламы его не отдаёт — смотрите в кабинете.', act: '' },
     'Ставка': { text: 'Сколько вы готовы платить за клик (или за 1000 показов). Списывается обычно меньше — по второй цене.', act: '' },
-    'Безубыточная ставка': { text: 'Ставка, при которой вся прибыль с заказа уходит в рекламу. Выше — каждый заказ в минус.', act: '' },
+    'Безубыточная ставка': { text: 'Ставка, при которой реклама работает в ноль: маржа с заказа (после всех расходов WB и себестоимости, с учётом выкупа) × конверсия клика в заказ, пересчитанная на долю списания WB (аукцион второй цены). Считается от маржи, не от цены.', act: 'Ставьте ниже: чем дальше от неё, тем больше прибыли с каждого рекламного заказа.' },
     'Переходы': { text: 'Сколько раз открыли карточку товара (из поиска, каталога, рекламы).', act: '' },
     '→ корзина': { text: 'Из открывших карточку — сколько положили в корзину, %.', act: '' },
     '→ заказ': { text: 'Из положивших в корзину — сколько заказали, %.', act: '' },
@@ -692,6 +692,42 @@
     const econTable = (it) => `${unitTable(it.unit)}
       <p class="small">Потолок ДРР: <b>${pct(it.economics.breakEvenDrrPct)}</b> — прибыль с заказа в процентах от цены. Реклама дороже — каждый заказ в минус.</p>`;
 
+    // Коридор ставок и план бюджета: худший / ожидаемый / лучший вариант по реальным данным (диапазон 90%)
+    const corridorHtml = (it) => {
+      const g = it.range;
+      const e = it.economics;
+      const b = it.budget;
+      const c = it.campaign;
+      if (!g) return `<div class="panel corridor"><h3>Коридор ставок и бюджет</h3><p class="muted">Нет данных о конверсии — коридор появится после первых кликов.</p></div>`;
+      const bidCell = (v) => (v == null ? '—' : `${n(v, 1)} ${c.paymentType === 'cpm' ? '₽/1000' : '₽'}`);
+      const pr = (o) => (o ? `${n(o.orders, 1)} зак. · <span class="${o.profit < 0 ? 'down' : ''}">${rub(o.profit)}</span>` : '—');
+      return `<div class="panel corridor"><h3>Коридор ставок и бюджет — по реальным данным</h3>
+        <p class="small muted">Конверсия клика в заказ <b>${pct(g.crLow * 100, 1)} … ${pct(g.crHigh * 100, 1)}</b> (${esc(it.inputs.crSource)}),
+          выкуп <b>${g.buyoutLow != null ? `${pct(g.buyoutLow, 0)} … ${pct(g.buyoutHigh, 0)}` : pct(it.unit.buyoutPct, 0)}</b> (${esc(it.unit.buyoutSource || '—')}).
+          Это диапазон, в котором настоящая цифра лежит с вероятностью 90%: чем больше кликов и заказов, тем он уже.</p>
+        <div class="table-wrap"><table class="data compact"><thead><tr><th></th><th class="num">Худший</th><th class="num">Ожидаемый</th><th class="num">Лучший</th></tr></thead><tbody>
+          <tr><td>Маржа с заказа (с учётом выкупа)</td><td class="num">${rub(g.pess.profitPerOrder)}</td><td class="num">${rub(e.profitPerOrder)}</td><td class="num">${rub(g.opt.profitPerOrder)}</td></tr>
+          <tr><td>Заказ с рекламы стоит при нынешней ставке</td><td class="num">${rub(g.pess.costPerOrder)}</td><td class="num">${rub(e.costPerOrder)}</td><td class="num">${rub(g.opt.costPerOrder)}</td></tr>
+          <tr><td><b>Прибыль с заказа после рекламы</b></td><td class="num"><b class="${g.pess.profitPerOrderAfterAds < 0 ? 'down' : ''}">${rub(g.pess.profitPerOrderAfterAds)}</b></td><td class="num"><b>${rub(e.profitPerOrderAfterAds)}</b></td><td class="num"><b>${rub(g.opt.profitPerOrderAfterAds)}</b></td></tr>
+          <tr><td>${term('Безубыточная ставка')}</td><td class="num">${bidCell(g.pess.breakEvenBid)}</td><td class="num">${bidCell(e.breakEvenBid)}</td><td class="num">${bidCell(g.opt.breakEvenBid)}</td></tr>
+          <tr><td>Ставка под цель ДРР ${pct(d.targetDrrPct, 0)}</td><td class="num">${bidCell(g.pess.targetBid)}</td><td class="num">${bidCell(e.targetBid)}</td><td class="num">${bidCell(g.opt.targetBid)}</td></tr>
+        </tbody></table></div>
+        ${g.pess.breakEvenBid == null ? '<p class="warn small">Безубыточную ставку не посчитать: в юнит-экономике не хватает данных (см. «Из чего прибыль с заказа»).</p>' : ''}
+        <ul class="plain corridor-zones${g.pess.breakEvenBid == null ? ' hidden' : ''}">
+          <li><span class="tag green">до ${bidCell(g.pess.breakEvenBid)}</span> безопасно: в плюс даже в худшем варианте</li>
+          <li><span class="tag">${bidCell(g.pess.breakEvenBid)} … ${bidCell(e.breakEvenBid)}</span> в плюс при ожидаемой конверсии, но риск уйти в минус</li>
+          <li><span class="tag red">выше ${bidCell(e.breakEvenBid)}</span> в минус при ожидаемой конверсии</li>
+          <li class="small muted">Сейчас ставка ${bidCell(it.inputs.bid)}, WB списывает ${n(it.inputs.chargeRatio * 100, 0)}% ставки (${esc(it.inputs.chargeSource)}).</li>
+        </ul>
+        ${b ? `<h3>Сколько закладывать в день</h3>
+        <div class="table-wrap"><table class="data compact"><thead><tr><th class="num">Бюджет в день</th><th class="num">Кликов</th><th class="num">Худший: заказы · прибыль</th><th class="num">Ожидаемый</th><th class="num">Лучший</th><th class="num">Остатка хватит</th></tr></thead><tbody>
+          ${b.rows.map((r) => `<tr${r.current ? ' class="current"' : ''}><td class="num">${rub(r.budget)}${r.current ? ' <span class="small muted">сейчас</span>' : ''}</td><td class="num">${n(r.clicks)}</td><td class="num">${pr(r.pess)}</td><td class="num">${pr(r.base)}</td><td class="num">${pr(r.opt)}</td><td class="num">${r.stockDays != null ? `~${n(r.stockDays)} дн.` : '—'}</td></tr>`).join('')}
+        </tbody></table></div>
+        <p class="small muted">При нынешней ставке (клик ≈ ${n(b.cpc, 2)} ₽), если WB тратит бюджет полностью. Прибыль — после рекламы и всех расходов WB, в день. Сколько кликов WB продаст при большем бюджете, зависит от спроса и ставки конкурентов — это проверяется только запуском.</p>
+        ${b.test ? `<p class="small"><b>Проверка:</b> до надёжной конверсии нужно ещё ${n(b.test.clicks)} кликов ≈ <b>${rub(b.test.spend)}</b>. Это максимум, который можно потерять, даже если заказов не будет совсем.</p>` : ''}` : ''}
+      </div>`;
+    };
+
     const clickTable = (it) => {
       const i = it.inputs;
       const e = it.economics;
@@ -781,6 +817,7 @@
               <p class="small muted">Клики в день: ${esc(it.inputs.clicksSource || '—')}. Бюджет в день: ${it.inputs.dailyBudget ? `${rub(it.inputs.dailyBudget)} — ${esc(it.inputs.budgetSource)}` : 'неизвестен'}.</p>
             </div>
           </div>
+          ${corridorHtml(it)}
           <details class="ad-more"><summary>Из чего прибыль с заказа (юнит-экономика)</summary>${econTable(it)}</details>
           <details class="ad-more" open><summary>Калькулятор: что будет, если поменять ставку или бюджет</summary>
             <div class="form-row calc">

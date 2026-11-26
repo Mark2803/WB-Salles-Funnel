@@ -195,3 +195,10 @@ th.num .term:hover::after, th.num .term:focus::after, td.num .term:hover::after 
   .term:hover::after, .term:focus::after { width: min(280px, 80vw); left: 0; right: auto; }
   h1 { font-size: 19px; }
 }
+
+/* Коридор ставок */
+.corridor { background: #fbf9fd; }
+.corridor-zones { margin: 10px 0; }
+.corridor-zones li { margin: 4px 0; }
+.tag.red { background: #fde8e8; color: var(--red); }
+table.data tr.current td { background: var(--accent-soft); }

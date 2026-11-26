@@ -257,6 +257,20 @@ const MIGRATIONS = [
   `
   ALTER TABLE finance_lines ADD COLUMN rebill REAL;
   `,
+  // 9 — выкуп по аналитике WB за «закрытый» период (заказы, по которым уже известен итог), по всем карточкам магазина.
+  //     nm_id = 0 — весь магазин. Это тот же процент выкупа, что WB показывает в кабинете.
+  `
+  CREATE TABLE buyout_stats (
+    nm_id INTEGER PRIMARY KEY,
+    vendor_code TEXT,
+    date_from TEXT,
+    date_to TEXT,
+    orders INTEGER,
+    buyouts INTEGER,
+    cancels INTEGER,
+    updated_at TEXT
+  );
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {

@@ -129,6 +129,48 @@ export async function collectProductSummary(client, db, nmIds, today = todayMsk(
   return { products: items.length };
 }
 
+// ---------- Выкуп по всем карточкам магазина (аналитика WB) ----------
+// Выкупы и отмены WB пишет на день заказа, поэтому берём заказы, по которым итог уже известен:
+// с 104 по 14 день назад (90 дней). Свежие заказы ещё едут — их выкуп неизвестен.
+export const BUYOUT_LAG_DAYS = 14;
+export const BUYOUT_WINDOW_DAYS = 90;
+
+export function parseBuyoutStats(resp) {
+  return (resp?.data?.products || [])
+    .filter((x) => x?.product?.nmId)
+    .map((x) => {
+      const sel = x.statistic?.selected || {};
+      return { nmId: x.product.nmId, vendorCode: x.product.vendorCode || null, orders: num(sel.orderCount), buyouts: num(sel.buyoutCount), cancels: num(sel.cancelCount) };
+    });
+}
+
+export async function collectBuyouts(client, db, nmIds, today = todayMsk()) {
+  const to = addDays(today, -BUYOUT_LAG_DAYS);
+  const from = addDays(to, -(BUYOUT_WINDOW_DAYS - 1));
+  const all = [];
+  for (let offset = 0; offset < 20000; offset += 1000) {
+    const resp = await client.post('analytics', '/api/analytics/v3/sales-funnel/products', {
+      selectedPeriod: { start: from, end: to },
+      nmIds: [],
+      skipDeletedNm: false,
+      limit: 1000,
+      offset,
+    });
+    const page = parseBuyoutStats(resp);
+    all.push(...page);
+    if (page.length < 1000) break;
+  }
+  const total = all.reduce((t, r) => ({ orders: t.orders + r.orders, buyouts: t.buyouts + r.buyouts, cancels: t.cancels + r.cancels }), { orders: 0, buyouts: 0, cancels: 0 });
+  transaction(db, () => {
+    const up = db.prepare(`INSERT INTO buyout_stats(nm_id, vendor_code, date_from, date_to, orders, buyouts, cancels, updated_at) VALUES (?,?,?,?,?,?,?,?)
+      ON CONFLICT(nm_id) DO UPDATE SET vendor_code = excluded.vendor_code, date_from = excluded.date_from, date_to = excluded.date_to, orders = excluded.orders,
+        buyouts = excluded.buyouts, cancels = excluded.cancels, updated_at = excluded.updated_at`);
+    for (const r of all) up.run(r.nmId, r.vendorCode, from, to, r.orders, r.buyouts, r.cancels, nowIso());
+    up.run(0, null, from, to, total.orders, total.buyouts, total.cancels, nowIso());
+  });
+  return { products: all.length, from, to, shopOrders: total.orders, shopBuyouts: total.buyouts, shopCancels: total.cancels };
+}
+
 // ---------- Цены и скидки ----------
 export function parsePrices(resp) {
   return (resp?.data?.listGoods || []).map((g) => {

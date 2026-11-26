@@ -346,3 +346,37 @@ test('финотчёт: доставка «к продавцу» (вывоз т�
   assert.equal(Math.round(shop.commissionPct * 10) / 10, 32.5);
   db.close();
 });
+
+test('диапазон Уилсона и коридор ставок', async () => {
+  const { wilson } = await import('../src/stats.mjs');
+  const { adRange, budgetPlan } = await import('../src/ads.mjs');
+  const w = wilson(8, 174);
+  assert.ok(w.low > 0.02 && w.low < 0.03, `низ ${w.low}`);
+  assert.ok(w.high > 0.07 && w.high < 0.08, `верх ${w.high}`);
+  assert.ok(wilson(80, 1740).high - wilson(80, 1740).low < w.high - w.low); // больше данных — уже диапазон
+  const inputs = { paymentType: 'cpc', bid: 9, chargeRatio: 0.65, cr: 8 / 174, crLow: w.low, crHigh: w.high, price: 1264, profitPerUnit: 497, buyoutPct: 90, buyoutLow: 85, buyoutHigh: 94, targetDrrPct: 20, dailyBudget: 337 };
+  const r = adRange(inputs);
+  assert.ok(r.pess.breakEvenBid < r.base.breakEvenBid && r.base.breakEvenBid < r.opt.breakEvenBid);
+  assert.ok(r.pess.profitPerOrderAfterAds < r.base.profitPerOrderAfterAds);
+  const plan = budgetPlan(inputs, r, { clicks: 40 }, { stockUnits: 42 });
+  assert.equal(plan.test.clicks, 60);
+  assert.ok(plan.rows.find((x) => x.current).budget === 337);
+});
+
+test('выкуп из аналитики WB: свой при ≥10 завершённых заказах, иначе по магазину', async () => {
+  const { openDb } = await import('../src/db.mjs');
+  const { buyoutFor } = await import('../src/metrics.mjs');
+  const db = openDb('', { memory: true });
+  const ins = db.prepare('INSERT INTO buyout_stats(nm_id, date_from, date_to, orders, buyouts, cancels) VALUES (?,?,?,?,?,?)');
+  ins.run(0, '2026-08-19', '2026-11-12', 500, 400, 90);
+  ins.run(1, '2026-08-19', '2026-11-12', 40, 30, 8);
+  ins.run(2, '2026-08-19', '2026-11-12', 3, 2, 1);
+  const own = buyoutFor(db, 1);
+  assert.equal(Math.round(own.pct), 79);
+  assert.match(own.source, /^по товару/);
+  const shop = buyoutFor(db, 2);
+  assert.equal(Math.round(shop.pct), 82);
+  assert.match(shop.source, /по всему магазину/);
+  assert.ok(shop.low < shop.pct && shop.high > shop.pct);
+  db.close();
+});

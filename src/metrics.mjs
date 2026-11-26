@@ -1,6 +1,7 @@
 // Расчёт показателей: воронка за период, реклама, юнит-экономика, остатки, тревоги.
 import { effectiveStatus } from './campaign-status.mjs';
 import { addDays, dateRange, todayMsk } from './dates.mjs';
+import { wilson } from './stats.mjs';
 
 const round = (v, d = 1) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 const div = (a, b) => (b ? a / b : null);
@@ -73,6 +74,8 @@ export function unitEconomics({ price, cost, settings, inputs = {} }) {
     taxPct,
     buyoutPct: buyoutPct != null ? round(buyoutPct, 0) : null,
     buyoutSource: inputs.buyoutSource ?? null,
+    buyoutLow: inputs.buyoutLow != null ? round(inputs.buyoutLow, 0) : null,
+    buyoutHigh: inputs.buyoutHigh != null ? round(inputs.buyoutHigh, 0) : null,
     logisticsPerSold: round(logisticsPerSold, 0),
     logisticsSource,
     logisticsDetail: inputs.fact?.logisticsPerSold == null ? inputs.logistics?.detail ?? null : null,
@@ -151,13 +154,18 @@ export function costInputs(db, nmId, today = todayMsk()) {
     };
   }
   const m30 = periodMetrics(db, nmId, addDays(today, -29), today);
-  // Выкуп: аналитика WB (если уже есть выкупы) → финотчёт товара → финотчёт магазина. 0% у нового товара — «выкупов ещё нет», а не «никто не выкупает».
+  // Выкуп — как в кабинете WB: аналитика по заказам, итог которых уже известен (с 104 по 14 день назад), по всем карточкам магазина.
+  //   1) свой выкуп товара, если у него ≥ 10 завершённых заказов;
+  //   2) иначе — выкуп всего магазина за тот же период;
+  //   3) если аналитики ещё нет — финотчёт (продано ÷ доставлено), сначала товар, потом магазин.
+  // Вместе с цифрой — диапазон (90%): с ним считаются худший и лучший варианты.
+  const pick = buyoutFor(db, nmId);
   const ownFin = own?.buyoutPct != null ? own : actualCosts(db, nmId, today, 90, 1);
   const shopFin = shop || actualCosts(db, null, today, 90, 10);
-  const buyoutPick = m30.buyoutPct > 0 ? { pct: m30.buyoutPct, source: 'аналитика WB за 30 дней' }
-    : ownFin?.buyoutPct != null ? { pct: ownFin.buyoutPct, source: `финотчёт WB по товару: продано ÷ доставлено (${ownFin.deliveries} доставок)` }
-    : shopFin?.buyoutPct != null ? { pct: shopFin.buyoutPct, source: `финотчёт WB по всему магазину: продано ÷ доставлено (${shopFin.deliveries} доставок) — у товара ещё нет выкупов` }
-    : null;
+  const buyoutPick = pick
+    || (ownFin?.buyoutPct != null ? { pct: ownFin.buyoutPct, source: `финотчёт WB по товару: продано ÷ доставлено (${ownFin.deliveries} доставок)`, ...rangeOf(wilson(ownFin.buyoutPct / 100 * ownFin.deliveries, ownFin.deliveries)) } : null)
+    || (shopFin?.buyoutPct != null ? { pct: shopFin.buyoutPct, source: `финотчёт WB по всему магазину: продано ÷ доставлено (${shopFin.deliveries} доставок)`, ...rangeOf(wilson(shopFin.buyoutPct / 100 * shopFin.deliveries, shopFin.deliveries)) } : null)
+    || (m30.buyoutPct > 0 ? { pct: m30.buyoutPct, source: 'аналитика WB за 30 дней' } : null);
   return {
     liters: liters != null ? round(liters, 3) : null,
     commission,
@@ -167,7 +175,35 @@ export function costInputs(db, nmId, today = todayMsk()) {
     fact: fact ? { logisticsPerSold: fact.logisticsPerSold, storagePerSold: fact.storagePerSold + fact.acceptancePerSold, label: factLabel, logisticsPerDelivery: fact.logisticsPerDelivery } : null,
     buyoutPct: buyoutPick?.pct ?? null,
     buyoutSource: buyoutPick?.source ?? null,
+    buyoutLow: buyoutPick?.low ?? null,
+    buyoutHigh: buyoutPick?.high ?? null,
   };
+}
+
+const rangeOf = (w) => (w ? { low: w.low * 100, high: w.high * 100 } : {});
+
+/** Выкуп из аналитики WB за закрытый период (таблица buyout_stats). */
+export function buyoutFor(db, nmId) {
+  let rows;
+  try {
+    rows = db.prepare('SELECT nm_id, date_from, date_to, orders, buyouts, cancels FROM buyout_stats WHERE nm_id IN (?, 0)').all(nmId);
+  } catch {
+    return null;
+  }
+  const fmtD = (d) => String(d || '').split('-').reverse().slice(0, 2).join('.');
+  const make = (r, label) => {
+    const done = (r.buyouts || 0) + (r.cancels || 0);
+    const w = wilson(r.buyouts, done);
+    return { pct: w.p * 100, low: w.low * 100, high: w.high * 100, done, source: `${label}: выкуплено ${r.buyouts} из ${done} завершённых заказов (аналитика WB, заказы с ${fmtD(r.date_from)} по ${fmtD(r.date_to)})` };
+  };
+  const own = rows.find((r) => r.nm_id === nmId);
+  if (own && own.buyouts + own.cancels >= 10) return make(own, 'по товару');
+  const shop = rows.find((r) => r.nm_id === 0);
+  if (shop && shop.buyouts + shop.cancels >= 30) {
+    const out = make(shop, `по всему магазину (у товара ${own ? own.buyouts + own.cancels : 0} завершённых заказов — мало)`);
+    return out;
+  }
+  return null;
 }
 
 // Официальная комиссия WB по предмету товара (FBW). Если предмет неизвестен, а у всех товаров он один — берём его.

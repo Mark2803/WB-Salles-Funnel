@@ -15,6 +15,7 @@ import { nowIso } from './db.mjs';
 import { periodMetrics, productSummary } from './metrics.mjs';
 import { LIVE_STATUSES } from './wb/collect.mjs';
 import { effectiveStatus } from './campaign-status.mjs';
+import { wilson } from './stats.mjs';
 
 const round = (v, d = 1) => (v == null || !Number.isFinite(v) ? null : Math.round(v * 10 ** d) / 10 ** d);
 const div = (a, b) => (b ? a / b : null);
@@ -286,14 +287,18 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
 
   let cr;
   let crSource;
+  let crCounts = null; // из скольких кликов (переходов) сколько заказов — для диапазона
   if (fact.clicks >= MIN_CLICKS_FOR_CR) {
     cr = fact.orders / fact.clicks;
+    crCounts = [fact.orders, fact.clicks];
     crSource = `рекламы (факт: ${fact.orders} заказов из ${fact.clicks} кликов${fact.otherOrders ? `, из них ${fact.otherOrders} — другие ваши товары` : ''})`;
   } else if (organicCr) {
     cr = organicCr;
+    crCounts = [organic.orders, organic.open];
     crSource = `карточки за 30 дней (${organic.orders} заказов из ${organic.open} переходов)`;
   } else if (fact.clicks > 0) {
     cr = fact.orders / fact.clicks;
+    crCounts = [fact.orders, fact.clicks];
     crSource = `рекламы, но данных мало (${fact.orders} заказов из ${fact.clicks} кликов) — цифра случайна`;
   } else {
     cr = null;
@@ -347,11 +352,17 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
     ctrSource,
     cr,
     crSource,
+    ...(() => {
+      const w = crCounts ? wilson(crCounts[0], crCounts[1]) : null;
+      return { crLow: w ? round(w.low, 4) : null, crHigh: w ? round(w.high, 4) : null };
+    })(),
     dailyBudget: dailyBudget ? round(dailyBudget, 0) : null,
     budgetSource,
     price,
     profitPerUnit: summary.unit.profitPerUnit,
     buyoutPct: summary.unit.buyoutPct ?? null,
+    buyoutLow: summary.unit.buyoutLow ?? null,
+    buyoutHigh: summary.unit.buyoutHigh ?? null,
     targetDrrPct: settings.targetDrrPct,
     ...overrides,
   };
@@ -374,6 +385,49 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
   inputs.clicksPerDay = clicksPerDay != null ? round(clicksPerDay, 1) : null;
   inputs.clicksSource = clicksSource;
   return { inputs, summary, fact, organicCr };
+}
+
+/**
+ * Коридор: худший и лучший варианты по реальным данным.
+ * Худший — нижняя граница конверсии и выкупа (90%), лучший — верхняя. «Безопасная ставка» — безубыточная в худшем варианте:
+ * до неё реклама не уходит в минус, даже если конверсия и выкуп окажутся у нижней границы.
+ */
+export function adRange(inputs) {
+  const base = adEconomics(inputs);
+  if (inputs.crLow == null) return { base, pess: null, opt: null };
+  const pess = adEconomics({ ...inputs, cr: inputs.crLow, buyoutPct: inputs.buyoutLow ?? inputs.buyoutPct });
+  const opt = adEconomics({ ...inputs, cr: inputs.crHigh, buyoutPct: inputs.buyoutHigh ?? inputs.buyoutPct });
+  return { base, pess, opt };
+}
+
+/**
+ * План бюджета при текущей ставке: что даст дневной бюджет (заказы и прибыль в день — от худшего до лучшего)
+ * и сколько ещё потратить, чтобы набрать 100 кликов и получить надёжную конверсию.
+ * Клики в день = бюджет ÷ цена клика (если WB тратит бюджет полностью — это видно по факту).
+ */
+export function budgetPlan(inputs, range, fact, { stockUnits = null } = {}) {
+  const cpc = range.base.cpc;
+  if (!cpc) return null;
+  const budgets = [...new Set([inputs.dailyBudget, 300, 500, 1000, 2000].filter((b) => b > 0).map((b) => Math.round(b)))].sort((a, b) => a - b);
+  const line = (budget) => {
+    const clicks = budget / cpc;
+    const at = (e, cr) => (e && cr != null ? { orders: round(clicks * cr, 1), profit: e.profitPerOrderAfterAds != null ? round(clicks * cr * e.profitPerOrderAfterAds, 0) : null } : null);
+    return {
+      budget,
+      current: budget === Math.round(inputs.dailyBudget || 0),
+      clicks: round(clicks, 0),
+      pess: at(range.pess, inputs.crLow),
+      base: at(range.base, inputs.cr),
+      opt: at(range.opt, inputs.crHigh),
+      stockDays: stockUnits && inputs.cr ? round(stockUnits / (clicks * inputs.cr), 0) : null,
+    };
+  };
+  const needClicks = Math.max(0, MIN_CLICKS_FOR_CR - (fact.clicks || 0));
+  return {
+    cpc,
+    rows: budgets.map(line),
+    test: needClicks > 0 ? { clicks: needClicks, spend: round(needClicks * cpc, 0) } : null,
+  };
 }
 
 /** Снимок прогноза: при первом появлении кампании и при смене ставки или бюджета. Пишет событие в журнал. */
@@ -407,13 +461,16 @@ export function snapshotForecasts(db, settings, today = todayMsk()) {
   return made;
 }
 
+const pick = (e) => ({ profitPerOrder: e.profitPerOrder, costPerOrder: e.costPerOrder, drrPct: e.drrPct, profitPerOrderAfterAds: e.profitPerOrderAfterAds, breakEvenBid: e.breakEvenBid, targetBid: e.targetBid, adShareOfMarginPct: e.adShareOfMarginPct });
+
 /** Карточки «Реклама»: каждая кампания × товар — вводные, прогноз, факт, сравнение, сценарии и советы. */
 export function adsOverview(db, settings, today = todayMsk()) {
   const out = [];
   for (const c of listCampaigns(db, { today })) {
     for (const nmId of c.nmIds) {
       const { inputs, summary, fact, organicCr } = adInputs(db, settings, c, nmId, today);
-      const econ = adEconomics(inputs);
+      const range = adRange(inputs);
+      const econ = range.base;
       const forecasts = db
         .prepare('SELECT id, created_at, start_date, reason, inputs_json, forecast_json FROM ad_forecasts WHERE advert_id = ? AND nm_id = ? ORDER BY id')
         .all(c.advertId, nmId)
@@ -428,6 +485,11 @@ export function adsOverview(db, settings, today = todayMsk()) {
         unit: summary.unit,
         inputs,
         economics: econ,
+        range: range.pess ? {
+          crLow: inputs.crLow, crHigh: inputs.crHigh, buyoutLow: inputs.buyoutLow, buyoutHigh: inputs.buyoutHigh,
+          pess: pick(range.pess), opt: pick(range.opt),
+        } : null,
+        budget: budgetPlan(inputs, range, fact, { stockUnits: summary.snapshot.stocks_wb }),
         recommended,
         fact,
         forecast: current,
