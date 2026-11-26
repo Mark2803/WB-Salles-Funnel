@@ -630,10 +630,10 @@ export async function collectFeedbacks(client, db, nmIds) {
 }
 
 // ---------- Финансовый отчёт: реальные комиссия, логистика, хранение ----------
-export function parseFinanceLines(resp, tracked) {
-  const set = new Set(tracked);
+// Финотчёт храним по всему магазину: по товарам без своих продаж берём медианы магазина (реальные цифры, не выдуманные)
+export function parseFinanceLines(resp) {
   return (Array.isArray(resp) ? resp : [])
-    .filter((l) => set.has(l.nmId))
+    .filter((l) => l && l.rrdId != null)
     .map((l) => ({
       rrdId: l.rrdId,
       nmId: l.nmId,
@@ -650,27 +650,39 @@ export function parseFinanceLines(resp, tracked) {
       penalty: num(l.penalty),
       deduction: num(l.deduction),
       acquiring: num(l.acquiringFee),
+      deliveryAmount: num(l.deliveryAmount),
+      returnAmount: num(l.returnAmount),
+      officeName: l.officeName || null,
+      vendorCode: l.vendorCode || null,
+      subject: l.subjectName || null,
+      bonusType: l.bonusTypeName || null,
     }));
 }
 
 export async function collectFinance(client, db, nmIds, today = todayMsk()) {
   let rrdId = 0;
   let saved = 0;
+  // Первый раз — за год (для медиан по магазину), дальше — последние 35 дней (WB дополняет отчёт задним числом)
+  const hasData = db.prepare('SELECT 1 FROM finance_lines WHERE delivery_amount IS NOT NULL LIMIT 1').get();
+  const dateFrom = addDays(today, hasData ? -35 : -365);
   for (let page = 0; page < 20; page++) {
     const resp = await client.post('finance', '/api/finance/v1/sales-reports/detailed', {
-      dateFrom: addDays(today, -30),
+      dateFrom,
       dateTo: today,
       limit: 100000,
       rrdId,
       period: 'daily',
     });
     if (!Array.isArray(resp) || resp.length === 0) break;
-    const rows = parseFinanceLines(resp, nmIds);
+    const rows = parseFinanceLines(resp);
     transaction(db, () => {
-      const up = db.prepare(`INSERT INTO finance_lines(rrd_id, nm_id, date, doc_type, oper_name, quantity, retail_price_disc, for_pay, commission_pct, delivery, storage, acceptance, penalty, deduction, acquiring)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(rrd_id) DO NOTHING`);
+      const up = db.prepare(`INSERT INTO finance_lines(rrd_id, nm_id, date, doc_type, oper_name, quantity, retail_price_disc, for_pay, commission_pct, delivery, storage, acceptance, penalty, deduction, acquiring,
+          delivery_amount, return_amount, office_name, vendor_code, subject, bonus_type)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(rrd_id) DO UPDATE SET delivery_amount = excluded.delivery_amount, return_amount = excluded.return_amount,
+          office_name = excluded.office_name, vendor_code = excluded.vendor_code, subject = excluded.subject, bonus_type = excluded.bonus_type`);
       for (const r of rows) {
-        up.run(r.rrdId, r.nmId, r.date, r.docType, r.operName, r.quantity, r.retailPriceDisc, r.forPay, r.commissionPct, r.delivery, r.storage, r.acceptance, r.penalty, r.deduction, r.acquiring);
+        up.run(r.rrdId, r.nmId ?? 0, r.date, r.docType, r.operName, r.quantity, r.retailPriceDisc, r.forPay, r.commissionPct, r.delivery, r.storage, r.acceptance, r.penalty, r.deduction, r.acquiring,
+          r.deliveryAmount, r.returnAmount, r.officeName, r.vendorCode, r.subject, r.bonusType);
         saved++;
       }
     });

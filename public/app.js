@@ -41,6 +41,8 @@
     CPO: { text: 'Цена заказа: сколько рекламы ушло на один заказ. CPO = затраты ÷ заказы. Главный показатель.', act: 'CPO меньше прибыли с заказа — реклама в плюс; больше — в минус.' },
     CPS: { text: 'Цена продажи (выкупа): затраты ÷ выкупы. Как CPO, но с учётом невыкупов. У чая выкуп ~95%, поэтому CPS ≈ CPO ÷ 0,95.', act: '' },
     'Сумма заказов': { text: 'На сколько рублей заказали после клика по рекламе (в ценах покупателя).', act: '' },
+    'Маржа': { text: 'Сколько остаётся с одной проданной штуки до рекламы: цена − комиссия WB − логистика − хранение − налог − себестоимость. Все цифры — из финотчёта и тарифов WB; чего нет — пишется «расчёт неполный».', act: 'Это потолок: больше, чем маржа, на рекламу одного заказа тратить нельзя.' },
+    'Доля маржи на рекламу': { text: 'Какую часть маржи забрала реклама: затраты на рекламу ÷ (заказы × выкуп × маржа с продажи). 30% — из каждых 100 ₽ маржи 30 ₽ ушло на рекламу. В отличие от ДРР (от цены), сразу видно, сколько осталось вам.', act: 'До 50% — спокойно, 50–100% — реклама почти всё съедает, 100% и больше — работаете в минус.' },
     'ДРР': { text: 'Доля рекламных расходов: реклама в процентах от суммы заказов. ДРР = затраты ÷ сумма заказов × 100%. В отчёте WB — «Доля затрат».', act: 'ДРР выше потолка (прибыль с заказа в % от цены) — реклама в минус.' },
     ROAS: { text: 'Окупаемость рекламы: сколько рублей заказов на 1 рубль рекламы. ROAS = сумма заказов ÷ затраты = 100 ÷ ДРР.', act: 'То же, что ДРР, только наоборот: больше — лучше.' },
     'Позиция': { text: 'Место карточки в выдаче по рекламным запросам. API WB для рекламы его не отдаёт — смотрите в кабинете.', act: '' },
@@ -228,6 +230,10 @@
     const profitKnown = ps.filter((p) => p.weekProfit != null);
     const profit = profitKnown.length ? sum((p) => p.weekProfit) : null;
     const drr = cur.spend > 0 && cur.orderSum ? (cur.spend / cur.orderSum) * 100 : null;
+    const marginKnown = ps.filter((p) => p.weekMargin != null);
+    const margin = marginKnown.length ? marginKnown.reduce((a, p) => a + p.weekMargin, 0) : null;
+    const spendKnown = marginKnown.reduce((a, p) => a + (p.week.ads.spend || 0), 0);
+    const adShare = margin > 0 && spendKnown > 0 ? (spendKnown / margin) * 100 : null;
     const alerts = ps.flatMap((p) => p.alerts.filter((a) => a.level !== 'info').map((a) => ({ ...a, p })));
     alerts.sort((a, b) => (a.level === 'critical' ? -1 : 1) - (b.level === 'critical' ? -1 : 1));
     const noCost = ps.filter((p) => p.unit.cost == null).length;
@@ -241,7 +247,8 @@
         <div class="kpi"><div class="label">Переходы в карточки</div><div class="value">${n(cur.open)}</div><div class="delta">${delta(ch(cur.open, prev.open))}</div></div>
         <div class="kpi"><div class="label">Заказы, шт.</div><div class="value">${n(cur.orders)}</div><div class="delta">${delta(ch(cur.orders, prev.orders))}</div></div>
         <div class="kpi"><div class="label">Заказы, ₽</div><div class="value">${rub(cur.orderSum)}</div><div class="delta">${delta(ch(cur.orderSum, prev.orderSum))}</div></div>
-        <div class="kpi"><div class="label">Реклама, ₽</div><div class="value">${rub(cur.spend)}</div><div class="delta muted">ДРР ${pct(drr)}</div></div>
+        <div class="kpi"><div class="label">Реклама, ₽</div><div class="value">${rub(cur.spend)}</div><div class="delta muted">${term('ДРР')} ${pct(drr)}</div></div>
+        <div class="kpi"><div class="label">${term('Маржа', 'Маржа до рекламы')}</div><div class="value">${margin == null ? '—' : rub(margin)}</div><div class="delta muted">${term('Доля маржи на рекламу', 'реклама съела')} ${adShare == null ? '—' : `<b class="${adShare >= 100 ? 'down' : adShare >= 50 ? '' : 'up'}">${pct(adShare, 0)}</b>`}</div></div>
         <div class="kpi"><div class="label">Ожидаемая прибыль после рекламы</div><div class="value">${profit == null ? '—' : rub(profit)}</div><div class="delta muted">${noCost ? `нет себестоимости у ${noCost} арт.` : 'по всем артикулам'}</div></div>
       </div>
       <div class="panel">
@@ -253,7 +260,7 @@
         <div class="table-wrap"><table class="data">
           <thead><tr>
             <th></th><th>Товар</th><th class="num">Цена</th><th class="num">Остаток</th><th class="num">${term('Переходы')}</th><th class="num">${term('→ корзина')}</th><th class="num">${term('→ заказ')}</th>
-            <th class="num">Заказы</th><th>14 дней</th><th class="num">${term('ДРР')}</th><th class="num" title="Ожидаемая: заказы × доля выкупа × прибыль с продажи − реклама">Прибыль 7 дн. (ожид.)</th><th class="num">Рейтинг</th><th>Стратегия</th>
+            <th class="num">Заказы</th><th>14 дней</th><th class="num">${term('ДРР')}</th><th class="num">${term('Доля маржи на рекламу', 'Реклама / маржа')}</th><th class="num" title="Ожидаемая: заказы × доля выкупа × прибыль с продажи − реклама">Прибыль 7 дн. (ожид.)</th><th class="num">Рейтинг</th><th>Стратегия</th>
           </tr></thead>
           <tbody>${ps
             .map(
@@ -268,6 +275,7 @@
               <td class="num">${n(p.week.orders)}<div class="small">${delta(p.changes.orders)}</div></td>
               <td>${C.spark(p.sparkOrders)}</td>
               <td class="num">${pct(p.week.ads.drr)}</td>
+              <td class="num">${p.adShareOfMarginPct == null ? '—' : `<span class="${p.adShareOfMarginPct >= 100 ? 'down' : ''}">${pct(p.adShareOfMarginPct, 0)}</span>`}</td>
               <td class="num">${p.weekProfit == null ? '<span class="muted small">нет себест.</span>' : rub(p.weekProfit)}</td>
               <td class="num">${p.snapshot.feedback_rating ? n(p.snapshot.feedback_rating, 1) : '—'}</td>
               <td>${p.activePlan ? `<span class="tag">${esc(p.activePlan.title)}</span>` : ''}${(p.campaigns || []).map((c) => `<a class="tag ${c.status === 9 ? 'green' : 'grey'}" href="#/ads?c=${c.advertId}" title="${esc(c.name)}">Реклама: ${c.paymentType === 'cpm' ? 'показы' : 'клики'}${c.bid != null ? `, ${n(c.bid, 1)} ₽` : ''}${c.status === 11 ? ' (пауза)' : c.status === 4 ? ' (не запущена)' : ''}</a>`).join(' ')}${!p.activePlan && !(p.campaigns || []).length ? '<span class="tag grey">нет</span>' : ''}</td>
@@ -315,11 +323,19 @@
         <div class="kpi"><div class="label">Цена продавца</div><div class="value">${rub(s.snapshot.seller_price)}</div><div class="delta muted">до скидки ${rub(s.snapshot.price)} · скидка ${pct(s.snapshot.discount_pct, 0)}</div></div>
         <div class="kpi"><div class="label">Остаток на WB</div><div class="value">${n(s.snapshot.stocks_wb)}</div><div class="delta muted">${s.stockDays != null ? `хватит ~${s.stockDays} дн.` : ''}</div></div>
         <div class="kpi"><div class="label">Заказы за 7 дней</div><div class="value">${n(w.orders)}</div><div class="delta">${delta(s.changes.orders)}</div></div>
-        <div class="kpi"><div class="label">Прибыль с продажи</div><div class="value">${rub(u.profitPerUnit)}</div><div class="delta muted">до рекламы</div></div>
+        <div class="kpi"><div class="label">${term('Маржа', 'Маржа с продажи')}</div><div class="value">${rub(u.profitPerUnit)}</div><div class="delta muted">${u.marginPct != null ? `${pct(u.marginPct)} от цены · ` : ''}до рекламы</div></div>
+        <div class="kpi"><div class="label">${term('Доля маржи на рекламу')}</div><div class="value">${s.adShareOfMarginPct != null ? pct(s.adShareOfMarginPct, 0) : '—'}</div><div class="delta muted">${s.weekMargin != null ? `реклама ${rub(w.ads.spend)} из маржи ${rub(s.weekMargin)} за 7 дн.` : 'нет себестоимости или комиссии'}</div></div>
         <div class="kpi"><div class="label">Рейтинг</div><div class="value">${s.snapshot.feedback_rating ? n(s.snapshot.feedback_rating, 1) : '—'}</div><div class="delta muted">отзывов в базе: ${n(s.feedbacks.total)}</div></div>
       </div>
       <div class="grid two">
-        <div class="panel"><h2>Воронка за 7 дней</h2><div class="funnel">${funnelHtml}</div>
+        <div class="panel"><h2>Воронка за 7 дней</h2>
+          ${C.funnel([
+            { label: 'Переходы в карточку', value: w.open, color: COLORS.open },
+            { label: 'Положили в корзину', value: w.cart, color: COLORS.cart, convLabel: 'в корзину' },
+            { label: 'Заказали', value: w.orders, color: COLORS.orders, convLabel: 'в заказ' },
+            { label: 'Выкупили', value: w.buyouts, color: COLORS.buyouts, convLabel: 'выкуп' },
+          ])}
+          <p class="small muted">Органических показов WB по API не отдаёт — воронка начинается с переходов. Выкупы за 7 дней отстают от заказов: товар ещё едет.</p>
           <p class="small muted">Реклама за 7 дней: показы ${n(w.ads.views)}, клики ${n(w.ads.clicks)}, CTR ${pct(w.ads.ctr, 2)}, клик ${rub(w.ads.cpc)}, заказ через рекламу ${rub(w.ads.cpo)}, расход ${rub(w.ads.spend)}, ДРР ${pct(w.ads.drr)}.</p>
           ${(s.campaigns || []).length ? `<p>${s.campaigns.map((c) => `<a class="btn ghost small" href="#/ads?c=${c.advertId}">Реклама «${esc(c.name)}»: прогноз и факт →</a>`).join(' ')}</p>` : ''}
         </div>
@@ -678,6 +694,7 @@
           <tr><td>${term('CR', 'Конверсия клика в заказ (CR)')} <span class="small muted">(${esc(i.crSource)})</span></td><td class="num">${pct(e.cr, 2)}</td></tr>
           <tr><td>${term('CPO', 'Заказ с рекламы стоит (CPO)')} <span class="small muted">(цена клика ÷ конверсия)</span></td><td class="num">${rub(e.costPerOrder)}</td></tr>
           <tr><td>${term('ДРР')} <span class="small muted">(цена клика ÷ (конверсия × цена))</span></td><td class="num"><b>${pct(e.drrPct)}</b> <span class="small muted">цель ${pct(d.targetDrrPct, 0)}</span></td></tr>
+          <tr><td>${term('Доля маржи на рекламу')} <span class="small muted">(заказ с рекламы ÷ маржа с заказа)</span></td><td class="num"><b class="${e.adShareOfMarginPct >= 100 ? 'bad' : ''}">${e.adShareOfMarginPct != null ? pct(e.adShareOfMarginPct, 0) : '—'}</b> <span class="small muted">маржа с заказа ${rub(e.profitPerOrder)}</span></td></tr>
           <tr><td>Прибыль с заказа после рекламы</td><td class="num"><b class="${e.profitPerOrderAfterAds != null && e.profitPerOrderAfterAds < 0 ? 'bad' : ''}">${rub(e.profitPerOrderAfterAds)}</b> <span class="small muted">маржа ${pct(e.marginAfterAdsPct)}</span></td></tr>
           <tr><td>${term('Безубыточная ставка')} <span class="small muted">(выше — каждый заказ в минус)</span></td><td class="num">${r1(e.breakEvenBid)} ${bidUnit(c)}</td></tr>
           <tr><td>Ставка под цель ДРР ${pct(d.targetDrrPct, 0)}</td><td class="num">${r1(e.targetBid)} ${bidUnit(c)}</td></tr>
@@ -722,6 +739,12 @@
               <div><span class="muted small">Остаток на WB</span><b>${n(it.product.stocks)}${it.product.stockDays != null ? ` · ~${it.product.stockDays} дн.` : ''}</b></div>
             </div>
           </div>
+          <div class="ad-funnel">${C.funnel([
+            { label: 'Показы', value: f.views, color: '#9b8ab8' },
+            { label: 'Клики', value: f.clicks, color: COLORS.open, convLabel: 'CTR' },
+            { label: 'Корзины', value: f.atbs, color: COLORS.cart, convLabel: 'в корзину' },
+            { label: 'Заказы', value: f.orders, color: COLORS.orders, convLabel: 'в заказ' },
+          ])}<p class="small muted">Факт кампании с ${esc(f.from || '')} по ${esc(f.to || '')}${f.orders && it.economics.profitPerOrder > 0 ? ` · реклама съела <b>${pct((f.spend / (f.orders * it.economics.profitPerOrder)) * 100, 0)}</b> маржи этих заказов` : ''}</p></div>
           <div class="metrics">
             <div class="metric"><div class="label">${term('Показы')}</div><div class="value">${n(f.views)}</div></div>
             <div class="metric"><div class="label">${term('Клики')}</div><div class="value">${n(f.clicks)}</div></div>

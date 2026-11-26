@@ -302,3 +302,26 @@ test('список товаров: колонка «Воронка WB», зап�
   assert.deepEqual([r.nmIds, r.source], [[7, 8], 'saved']);
   db.close();
 });
+
+test('факт из финотчёта: фактическая комиссия, медиана логистики, выброс не учитывается, медианы магазина', async () => {
+  const { openDb } = await import('../src/db.mjs');
+  const { actualCosts } = await import('../src/metrics.mjs');
+  const db = openDb('', { memory: true });
+  const ins = db.prepare(`INSERT INTO finance_lines(rrd_id, nm_id, date, oper_name, quantity, retail_price_disc, for_pay, commission_pct, delivery, delivery_amount, return_amount, storage, acceptance, penalty, deduction, acquiring)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  let id = 1;
+  for (let i = 0; i < 4; i++) ins.run(id++, 1, '2026-11-20', 'Продажа', 1, 1000, 860, 25, 0, 0, 0, 0, 0, 0, 0, 20);
+  for (let i = 0; i < 4; i++) ins.run(id++, 1, '2026-11-20', 'Логистика', 0, 0, 0, 0, 60, 1, 0, 0, 0, 0, 0, 0);
+  ins.run(id++, 1, '2026-11-20', 'Логистика', 0, 0, 0, 0, 50, 0, 1, 0, 0, 0, 0, 0); // обратная доставка
+  ins.run(id++, 1, '2026-11-21', 'Логистика', 0, 0, 0, 0, 150000, 1, 0, 0, 0, 0, 0, 0); // ошибочное начисление WB
+  ins.run(id++, 2, '2026-11-21', 'Продажа', 10, 5000, 4000, 25, 0, 0, 0, 0, 0, 0, 0, 0);
+  const own = actualCosts(db, 1, '2026-11-26', 90, 3);
+  assert.equal(Math.round(own.commissionPct), 14); // 1 − 3440 / 4000
+  assert.equal(own.logisticsPerSold, (240 + 50) / 4);
+  assert.equal(own.logisticsPerDelivery, 60);
+  assert.equal(own.outliers, 1);
+  assert.equal(actualCosts(db, 3, '2026-11-26', 90, 3), null); // у товара нет продаж
+  const shop = actualCosts(db, null, '2026-11-26', 90, 10);
+  assert.equal(shop.soldUnits, 14);
+  db.close();
+});

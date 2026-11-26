@@ -42,7 +42,7 @@ export function unitEconomics({ price, cost, settings, inputs = {} }) {
   let logisticsSource = null;
   if (inputs.fact?.logisticsPerSold != null) {
     logisticsPerSold = inputs.fact.logisticsPerSold;
-    logisticsSource = 'финотчёт WB за 30 дней';
+    logisticsSource = `${inputs.fact.label}; туда и обратно${inputs.fact.logisticsPerDelivery != null ? `, медиана за одну доставку ${String(round(inputs.fact.logisticsPerDelivery, 1)).replace('.', ',')} ₽` : ''}`;
   } else if (inputs.logistics?.perDelivery != null) {
     logisticsPerSold = inputs.logistics.perDelivery / (buyout ?? 1);
     logisticsSource = inputs.logistics.source;
@@ -53,7 +53,7 @@ export function unitEconomics({ price, cost, settings, inputs = {} }) {
   let storageSource = null;
   if (inputs.fact?.storagePerSold != null) {
     storagePerSold = inputs.fact.storagePerSold;
-    storageSource = 'финотчёт WB за 30 дней (хранение и приёмка)';
+    storageSource = `${inputs.fact.label}; хранение и приёмка`;
   } else if (inputs.storage?.perDay != null && inputs.storage?.days != null) {
     storagePerSold = inputs.storage.perDay * inputs.storage.days;
     storageSource = inputs.storage.source;
@@ -97,13 +97,18 @@ export function unitEconomics({ price, cost, settings, inputs = {} }) {
 export function costInputs(db, nmId, today = todayMsk()) {
   const p = db.prepare('SELECT length_cm, width_cm, height_cm FROM products WHERE nm_id = ?').get(nmId) || {};
   const liters = p.length_cm && p.width_cm && p.height_cm ? (p.length_cm * p.width_cm * p.height_cm) / 1000 : null;
-  const fact = actualCosts(db, nmId, today);
+  const own = actualCosts(db, nmId, today, 90, 3);
+  const shop = own ? null : actualCosts(db, null, today, 90, 10);
+  const fact = own || shop;
+  const factLabel = own ? `финотчёт WB по товару за 90 дней (${own.soldUnits} продаж)` : shop ? `финотчёт WB, по всему магазину за 90 дней (${shop.soldUnits} продаж) — своих продаж у товара пока мало` : null;
 
   const tariff = tariffFor(db, nmId);
   const commission = fact?.commissionPct != null
-    ? { pct: fact.commissionPct, source: 'финотчёт WB за 30 дней' }
+    ? { pct: fact.commissionPct, source: `${factLabel}; фактически удержано WB${fact.commissionIncludesAcquiring ? ', включая эквайринг' : ''}` }
     : tariff?.pct != null ? { pct: tariff.pct, source: `тариф WB для предмета «${tariff.subjectName}» (FBW)` } : null;
-  const acquiring = fact?.acquiringPct != null ? { pct: fact.acquiringPct, source: 'финотчёт WB за 30 дней' } : null;
+  const acquiring = fact?.commissionIncludesAcquiring
+    ? { pct: 0, source: 'уже входит в фактическую комиссию' }
+    : fact?.acquiringPct != null ? { pct: fact.acquiringPct, source: factLabel } : null;
 
   // Склады, где лежит товар, и их тарифы (доля склада — по остатку)
   const wh = db
@@ -152,7 +157,7 @@ export function costInputs(db, nmId, today = todayMsk()) {
     acquiring,
     logistics,
     storage,
-    fact: fact ? { logisticsPerSold: fact.logisticsPerSold, storagePerSold: fact.storagePerSold } : null,
+    fact: fact ? { logisticsPerSold: fact.logisticsPerSold, storagePerSold: fact.storagePerSold + fact.acceptancePerSold, label: factLabel, logisticsPerDelivery: fact.logisticsPerDelivery } : null,
     buyoutPct: m30.buyoutPct ?? null,
     buyoutSource: m30.buyoutPct != null ? 'аналитика WB за 30 дней' : null,
   };
@@ -166,29 +171,57 @@ export function tariffFor(db, nmId) {
   return all.length === 1 && all[0].pct != null ? all[0] : null;
 }
 
-// Фактические комиссия и логистика за 30 дней из финотчёта WB
-export function actualCosts(db, nmId, today = todayMsk()) {
-  const from = addDays(today, -30);
-  const r = db
-    .prepare(`SELECT
-        SUM(CASE WHEN oper_name LIKE 'Продажа%' THEN quantity ELSE 0 END) AS sold,
-        SUM(CASE WHEN oper_name LIKE 'Возврат%' THEN quantity ELSE 0 END) AS returned,
-        AVG(CASE WHEN oper_name LIKE 'Продажа%' AND commission_pct > 0 THEN commission_pct END) AS commission,
-        SUM(delivery) AS delivery, SUM(storage) AS storage, SUM(acceptance) AS acceptance,
-        SUM(penalty) AS penalty, SUM(deduction) AS deduction,
-        SUM(CASE WHEN oper_name LIKE 'Продажа%' THEN acquiring ELSE 0 END) AS acquiring,
-        SUM(CASE WHEN oper_name LIKE 'Продажа%' THEN retail_price_disc ELSE 0 END) AS saleSum
-      FROM finance_lines WHERE nm_id = ? AND date >= ?`)
-    .get(nmId, from);
-  const net = (r?.sold || 0) - (r?.returned || 0);
-  if (!r || net < 3) return null; // мало продаж — оценка ненадёжна
+// Фактические расходы из финотчёта WB (детализация). nmId = null — по всему магазину.
+//   комиссия — фактическая: 1 − «к перечислению» ÷ «цена с учётом скидки» по продажам (в неё уже входит эквайринг и скидки WB);
+//   логистика на проданную штуку — все «услуги по доставке» (туда и обратно) ÷ чистые продажи;
+//   логистика за одну доставку — медиана по строкам «Логистика» (услуги ÷ количество доставок);
+//   хранение и приёмка — суммы ÷ чистые продажи.
+// Строки с логистикой больше чем в 20 раз выше медианы (разовые ошибочные начисления WB) не учитываются.
+const median = (arr) => {
+  const a = arr.filter((x) => Number.isFinite(x)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+};
+
+export function actualCosts(db, nmId, today = todayMsk(), days = 90, minSold = 3) {
+  const from = addDays(today, -days);
+  const where = nmId == null ? 'date >= ?' : 'nm_id = ? AND date >= ?';
+  const args = nmId == null ? [from] : [nmId, from];
+  const lines = db.prepare(`SELECT oper_name, quantity, retail_price_disc, for_pay, commission_pct, delivery, delivery_amount, return_amount, storage, acceptance, penalty, deduction, acquiring
+    FROM finance_lines WHERE ${where}`).all(...args);
+  if (!lines.length) return null;
+  const isSale = (l) => /^Продажа/.test(l.oper_name || '');
+  const isReturn = (l) => /^Возврат/.test(l.oper_name || '');
+  const sold = lines.filter(isSale).reduce((n, l) => n + (l.quantity || 0), 0);
+  const returned = lines.filter(isReturn).reduce((n, l) => n + (l.quantity || 0), 0);
+  const net = sold - returned;
+  if (net < minSold) return null; // мало продаж — оценка ненадёжна
+  const perDelivery = lines
+    .filter((l) => (l.delivery || 0) > 0 && (l.delivery_amount || 0) + (l.return_amount || 0) > 0)
+    .map((l) => l.delivery / ((l.delivery_amount || 0) + (l.return_amount || 0)));
+  const deliveryMedian = median(perDelivery);
+  const isOutlier = (l) => deliveryMedian != null && (l.delivery || 0) > 0 && (l.delivery / Math.max(1, (l.delivery_amount || 0) + (l.return_amount || 0))) > deliveryMedian * 20;
+  const outliers = lines.filter(isOutlier);
+  const sum = (key, filter = () => true) => lines.filter(filter).reduce((n, l) => n + (l[key] || 0), 0);
+  const saleRetail = sum('retail_price_disc', isSale);
+  const saleForPay = sum('for_pay', isSale);
+  const delivery = sum('delivery', (l) => !isOutlier(l));
   return {
     soldUnits: net,
-    commissionPct: r.commission ?? null,
-    logisticsPerSold: (r.delivery || 0) / net,
-    storagePerSold: ((r.storage || 0) + (r.acceptance || 0)) / net,
-    acquiringPct: r.saleSum > 0 && r.acquiring > 0 ? (r.acquiring / r.saleSum) * 100 : null,
-    penalties: (r.penalty || 0) + (r.deduction || 0),
+    days,
+    // Фактическая комиссия WB: сколько от цены продажи не дошло до вас (включая эквайринг)
+    commissionPct: saleRetail > 0 && saleForPay > 0 ? (1 - saleForPay / saleRetail) * 100 : median(lines.filter(isSale).map((l) => l.commission_pct).filter((x) => x > 0)),
+    commissionIncludesAcquiring: saleRetail > 0 && saleForPay > 0,
+    acquiringPct: saleRetail > 0 ? (sum('acquiring', isSale) / saleRetail) * 100 : null,
+    logisticsPerSold: delivery / net,
+    logisticsPerDelivery: deliveryMedian,
+    storagePerSold: sum('storage') / net,
+    acceptancePerSold: sum('acceptance') / net,
+    storageTotal: sum('storage'),
+    penalties: sum('penalty') + sum('deduction'),
+    outliers: outliers.length,
+    outlierSum: outliers.reduce((n, l) => n + (l.delivery || 0), 0),
   };
 }
 
@@ -309,6 +342,9 @@ export function productSummary(db, p, settings, today = todayMsk()) {
   // Не по выкупам: WB засчитывает выкуп через несколько дней после заказа, и свежие заказы давали бы «минус весь расход».
   // Выкуп неизвестен — считаем, что выкупают всё, и это видно в «missing»
   const profit = unit.profitPerUnit != null ? round(cur.orders * ((unit.buyoutPct ?? 100) / 100) * unit.profitPerUnit - (cur.ads.spend || 0), 0) : null;
+  // Маржа: сколько заработали на заказах до рекламы (цена − все удержания − себестоимость) и какую долю съела реклама
+  const marginWeek = unit.profitPerUnit != null ? round(cur.orders * ((unit.buyoutPct ?? 100) / 100) * unit.profitPerUnit, 0) : null;
+  const adShareOfMarginPct = marginWeek > 0 && cur.ads.spend > 0 ? round((cur.ads.spend / marginWeek) * 100, 0) : null;
   const alerts = buildAlerts({ cur, prev, snap, stockDays, fb, unit, settings });
   const spark = db
     .prepare('SELECT date, order_count FROM funnel_daily WHERE nm_id = ? AND date BETWEEN ? AND ? ORDER BY date')
@@ -341,6 +377,9 @@ export function productSummary(db, p, settings, today = todayMsk()) {
     },
     unit,
     weekProfit: profit,
+    weekMargin: marginWeek,
+    adShareOfMarginPct,
+    profitPerOrder: unit.profitPerUnit != null ? round(unit.profitPerUnit * ((unit.buyoutPct ?? 100) / 100), 0) : null,
     stockDays: round(stockDays, 0),
     feedbacks: fb,
     alerts,

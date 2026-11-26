@@ -99,7 +99,7 @@ test('API: вход, сбор, сводка, симулятор, планы, ж�
     assert.equal(item.campaign.paymentType, 'cpc');
     assert.equal(item.inputs.bid, 9);
     assert.ok(item.forecast && item.comparison && item.recommendations.length > 0);
-    assert.equal(item.unit.commissionSource, 'финотчёт WB за 30 дней');
+    assert.match(item.unit.commissionSource, /^финотчёт WB по товару за 90 дней/);
     const calc = await call('POST', '/api/ads/calc', { advertId: item.campaign.advertId, nmId: item.nmId, bid: 12 });
     assert.equal(calc.status, 200);
     assert.ok(calc.json.economics.drrPct > item.economics.drrPct);

@@ -243,6 +243,16 @@ const MIGRATIONS = [
     new_value REAL
   );
   `,
+  // 7 — финотчёт по всему магазину (не только отслеживаемые товары): количество доставок, склад, артикул — для медиан
+  `
+  ALTER TABLE finance_lines ADD COLUMN delivery_amount REAL;
+  ALTER TABLE finance_lines ADD COLUMN return_amount REAL;
+  ALTER TABLE finance_lines ADD COLUMN office_name TEXT;
+  ALTER TABLE finance_lines ADD COLUMN vendor_code TEXT;
+  ALTER TABLE finance_lines ADD COLUMN subject TEXT;
+  ALTER TABLE finance_lines ADD COLUMN bonus_type TEXT;
+  CREATE INDEX finance_lines_date ON finance_lines(date);
+  `,
 ];
 
 export function openDb(dataDir, { memory = false } = {}) {

@@ -85,6 +85,8 @@ export function adEconomics(inputs) {
     breakEvenDrrPct: profitPerOrder != null && price ? round((profitPerOrder / price) * 100, 1) : null,
     profitPerOrderAfterAds: round(profitPerOrderAfterAds, 0),
     marginAfterAdsPct: profitPerOrderAfterAds != null && price ? round((profitPerOrderAfterAds / price) * 100, 1) : null,
+    // Какую долю маржи (прибыли с заказа до рекламы) съедает реклама: 100% — работаете в ноль
+    adShareOfMarginPct: costPerOrder != null && profitPerOrder > 0 ? round((costPerOrder / profitPerOrder) * 100, 0) : null,
     breakEvenCpc: round(breakEvenCpc, 2),
     targetCpc: round(targetCpc, 2),
     // Какую ставку ставить в кабинете, чтобы цена клика была безубыточной / под цель (с учётом доли списания)

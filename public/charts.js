@@ -129,5 +129,30 @@
     return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}"><polyline points="${pts}" fill="none" stroke="${color || '#7b2cbf'}" stroke-width="1.6"/></svg>`;
   }
 
-  window.Charts = { line, bars, spark, fmt };
+  // Воронка: steps = [{ label, value, color }]. Ширина ступеней — классическая воронка (сужается равномерно),
+  // числа и проценты перехода — настоящие. Возвращает строку SVG.
+  function funnel(steps) {
+    const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    const W = 420, stepH = 52, gap = 22, n = steps.length;
+    const H = n * stepH + (n - 1) * gap;
+    const widthAt = (i) => W * (1 - (0.5 * i) / Math.max(1, n));
+    let out = `<svg class="funnel-svg" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Воронка">`;
+    steps.forEach((st, i) => {
+      const y = i * (stepH + gap);
+      const w1 = widthAt(i), w2 = widthAt(i + 1);
+      const x1 = (W - w1) / 2, x2 = (W - w2) / 2;
+      out += `<path d="M${x1},${y} L${x1 + w1},${y} L${x2 + w2},${y + stepH} L${x2},${y + stepH} Z" fill="${st.color}" opacity="0.92"/>`;
+      out += `<text x="${W / 2}" y="${y + 22}" text-anchor="middle" fill="#fff" font-size="15" font-weight="600">${esc(st.label)}</text>`;
+      out += `<text x="${W / 2}" y="${y + 43}" text-anchor="middle" fill="#fff" font-size="19" font-weight="700">${st.value == null ? '—' : fmt(st.value)}</text>`;
+      if (i > 0) {
+        const prev = steps[i - 1].value;
+        const conv = prev > 0 && st.value != null ? (st.value / prev) * 100 : null;
+        const txt = conv == null ? '' : `${st.convLabel || 'переход'} ${conv < 10 ? conv.toFixed(1).replace('.', ',') : Math.round(conv)}%`;
+        out += `<text x="${W / 2}" y="${y - 6}" text-anchor="middle" fill="#6b6775" font-size="13">↓ ${esc(txt)}</text>`;
+      }
+    });
+    return out + '</svg>';
+  }
+
+  window.Charts = { line, bars, spark, fmt, funnel };
 })();
