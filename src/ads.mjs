@@ -63,6 +63,8 @@ export function adEconomics(inputs) {
   const costPerOrder = cpc != null && cr ? cpc / cr : null;
   const drrPct = cpc != null && cr && price ? (cpc / (cr * price)) * 100 : null;
   const profitPerOrderAfterAds = profitPerOrder != null && costPerOrder != null ? profitPerOrder - costPerOrder : null;
+  // Прибыль с одного клика = конверсия × маржа с заказа − цена клика. Работает и при нулевой конверсии (тогда = −цена клика).
+  const profitPerClick = profitPerOrder != null && cr != null && cpc != null ? cr * profitPerOrder - cpc : null;
   const breakEvenCpc = profitPerOrder != null && cr ? Math.max(0, profitPerOrder * cr) : null;
   const targetCpc = inputs.targetDrrPct != null && price && cr ? (inputs.targetDrrPct / 100) * price * cr : null;
   const clicks = inputs.clicksPerDay ?? null;
@@ -74,7 +76,7 @@ export function adEconomics(inputs) {
         buyouts: round(clicks * cr * buyout, 2),
         spend: round(clicks * cpc, 0),
         revenue: price ? round(clicks * cr * price, 0) : null,
-        profit: profitPerOrderAfterAds != null ? round(clicks * cr * profitPerOrderAfterAds, 0) : null,
+        profit: profitPerClick != null ? round(clicks * profitPerClick, 0) : null,
       }
     : null;
   return {
@@ -85,6 +87,8 @@ export function adEconomics(inputs) {
     drrPct: round(drrPct, 1),
     breakEvenDrrPct: profitPerOrder != null && price ? round((profitPerOrder / price) * 100, 1) : null,
     profitPerOrderAfterAds: round(profitPerOrderAfterAds, 0),
+    profitPerClick: round(profitPerClick, 2),
+    profitPer100Clicks: profitPerClick != null ? round(profitPerClick * 100, 0) : null,
     marginAfterAdsPct: profitPerOrderAfterAds != null && price ? round((profitPerOrderAfterAds / price) * 100, 1) : null,
     // Какую долю маржи (прибыли с заказа до рекламы) съедает реклама: 100% — работаете в ноль
     adShareOfMarginPct: costPerOrder != null && profitPerOrder > 0 ? round((costPerOrder / profitPerOrder) * 100, 0) : null,
@@ -222,20 +226,23 @@ export function adRecommendations({ econ, range = null, fact, inputs, recommende
     const beCr = econ.profitPerOrder > 0 ? econ.cpc / econ.profitPerOrder : null; // конверсия, нужная для работы в ноль
     const budgetLimited = inputs.dailyBudget && fact?.perDay && fact.perDay.spend >= inputs.dailyBudget * 0.9;
     const step = 100;
-    const more = (e, crv) => (e?.profitPerOrderAfterAds != null && crv != null ? (step / econ.cpc) * crv * e.profitPerOrderAfterAds : null);
-    if (g.opt.profitPerOrderAfterAds != null && g.opt.profitPerOrderAfterAds < 0) {
-      add('critical', `Реклама в минус даже в лучшем варианте: при цене клика ${r1(econ.cpc)} ₽ нужна конверсия не ниже ${beCr != null ? r1(beCr * 100) : '—'}%, а у кампании она не выше ${r1(inputs.crHigh * 100)}%. Снизьте ${bidLabel} до ${bidFmt(safe)} или остановите кампанию и проверьте карточку.`);
-    } else if (g.pess.profitPerOrderAfterAds != null && g.pess.profitPerOrderAfterAds > 0) {
-      let t = `Реклама в плюс даже в худшем варианте: с каждого заказа после рекламы остаётся от ${money(g.pess.profitPerOrderAfterAds)} до ${money(g.opt.profitPerOrderAfterAds)}.`;
-      if (budgetLimited) t += ` Дневной бюджет (${money(inputs.dailyBudget)}) уходит полностью — его можно поднять: каждые +${step} ₽ в день ≈ +${Math.round(step / econ.cpc)} кликов и +${money(more(g.pess, inputs.crLow))}…${money(more(g.opt, inputs.crHigh))} прибыли в день (если WB продаст столько кликов — это видно по факту через 1–2 дня).`;
+    const more = (e) => (e?.profitPerClick != null ? (step / econ.cpc) * e.profitPerClick : null);
+    const pc = (e) => e?.profitPerClick;
+    if (pc(g.opt) != null && pc(g.opt) < 0) {
+      add('critical', `Реклама в минус даже в лучшем варианте: при цене клика ${r1(econ.cpc)} ₽ нужна конверсия не ниже ${beCr != null ? r1(beCr * 100) : '—'}%, а у кампании она, по данным, не выше ${r1(inputs.crHigh * 100)}%. Каждые 100 кликов — от ${money(g.pess.profitPer100Clicks)} до ${money(g.opt.profitPer100Clicks)}. Снизьте ${bidLabel}${safe != null ? ` до ${bidFmt(safe)}` : ''} или остановите кампанию и проверьте карточку.`);
+    } else if (pc(g.pess) != null && pc(g.pess) > 0) {
+      let t = `Реклама в плюс даже в худшем варианте: каждые 100 кликов приносят от ${money(g.pess.profitPer100Clicks)} до ${money(g.opt.profitPer100Clicks)} прибыли после рекламы.`;
+      if (budgetLimited) t += ` Дневной бюджет (${money(inputs.dailyBudget)}) уходит полностью — его можно поднять: каждые +${step} ₽ в день ≈ +${Math.round(step / econ.cpc)} кликов и +${money(more(g.pess))}…${money(more(g.opt))} прибыли в день (если WB продаст столько кликов — это видно по факту через 1–2 дня).`;
       if (safe != null && inputs.bid != null && inputs.bid < safe * 0.9) t += ` ${bidLabel[0].toUpperCase()}${bidLabel.slice(1)} можно поднять до ${bidFmt(safe)} — это безопасно даже при худшей конверсии; показов станет больше.`;
       add('good', t);
-    } else if (econ.profitPerOrderAfterAds != null && econ.profitPerOrderAfterAds > 0) {
+    } else if (pc(econ) != null && pc(econ) > 0) {
       const p = inputs.cr;
       const need = beCr != null && p > beCr ? Math.ceil((1.645 ** 2 * p * (1 - p)) / ((p - beCr) ** 2)) : null;
-      add('info', `Скорее в плюс (при ожидаемой конверсии ${r1(p * 100)}% с заказа остаётся ${money(econ.profitPerOrderAfterAds)}), но не наверняка: в худшем варианте ${money(g.pess.profitPerOrderAfterAds)}. Чтобы не рисковать — ${bidLabel} не выше ${bidFmt(safe)}.${need && need > clicks ? ` Ясно станет примерно после ${need} кликов (сейчас ${clicks}).` : ''}`);
-    } else if (econ.profitPerOrderAfterAds != null) {
-      add('warning', `Скорее в минус: при ожидаемой конверсии ${r1(inputs.cr * 100)}% заказ с рекламы стоит ${money(econ.costPerOrder)}, а маржа с заказа ${money(econ.profitPerOrder)}. Снизьте ${bidLabel} до ${bidFmt(safe ?? econ.breakEvenBid)} или проверьте карточку.`);
+      add('info', `Скорее в плюс: при ожидаемой конверсии ${r1(p * 100)}% каждые 100 кликов дают ${money(econ.profitPer100Clicks)}, но не наверняка — в худшем варианте ${money(g.pess.profitPer100Clicks)}. Чтобы не рисковать — ${bidLabel} не выше ${bidFmt(safe)}.${need && need > clicks ? ` Ясно станет примерно после ${need} кликов (сейчас ${clicks}).` : ''}`);
+    } else if (pc(econ) != null) {
+      const p = inputs.cr;
+      const need = beCr != null && p < beCr ? Math.ceil((1.645 ** 2 * beCr * (1 - beCr)) / ((beCr - p) ** 2)) : null;
+      add('warning', `Скорее в минус: чтобы реклама окупалась при цене клика ${r1(econ.cpc)} ₽, нужна конверсия от ${beCr != null ? r1(beCr * 100) : '—'}%, а сейчас ожидается ${r1(p * 100)}%. Каждые 100 кликов: от ${money(g.pess.profitPer100Clicks)} до ${money(g.opt.profitPer100Clicks)}.${safe ? ` Безопасная ставка — ${bidFmt(safe)}.` : ' Безопасной ставки нет: в худшем варианте заказов может не быть совсем.'}${need && need > clicks ? ` Проверка: если к ${need} кликам конверсия не дойдёт до ${r1(beCr * 100)}%, кампанию лучше остановить (сейчас ${clicks} кликов).` : ''}`);
     }
   }
   if (fact && fact.views >= MIN_VIEWS_FOR_CTR && fact.ctr != null && fact.ctr < 1.5) {
@@ -306,18 +313,23 @@ export function adInputs(db, settings, campaign, nmId, today = todayMsk(), overr
   const daily = db
     .prepare(`SELECT date, SUM(clicks) clicks, SUM(orders) orders FROM ads_daily WHERE advert_id = ? AND (nm_id = ? OR ?) AND date BETWEEN ? AND ? GROUP BY date`)
     .all(campaign.advertId, nmId, withOthers ? 1 : 0, from, today);
-  const priorCr = organic.open >= 50 ? organic.orders / organic.open : null;
+  // Априорная конверсия — только НЕрекламные переходы карточки: из переходов и заказов карточки вычитаем рекламные
+  // клики и заказы этого товара за те же 30 дней, иначе одни и те же клики посчитались бы дважды.
+  const adOwn = db.prepare('SELECT COALESCE(SUM(clicks),0) clicks, COALESCE(SUM(orders),0) orders FROM ads_daily WHERE nm_id = ? AND date BETWEEN ? AND ?').get(nmId, addDays(today, -29), today);
+  const orgOpens = Math.max(0, organic.open - adOwn.clicks);
+  const orgOrders = Math.max(0, organic.orders - adOwn.orders);
+  const priorCr = orgOpens >= 50 ? orgOrders / orgOpens : null;
   const est = decayedRate(daily, today, { prior: priorCr });
   let cr = est ? est.rate : null;
   let crLow = est ? est.low : null;
   let crHigh = est ? est.high : null;
   const pctTxt = (v) => String(round(v * 100, 1)).replace('.', ',');
   let crSource;
-  if (!est) crSource = 'нет данных: у кампании ещё нет кликов, а у карточки меньше 50 переходов за 30 дней';
-  else if (est.clicks === 0) crSource = `пока только конверсия карточки за 30 дней: ${organic.orders} заказов из ${organic.open} переходов`;
+  if (!est) crSource = 'нет данных: у кампании ещё нет кликов, а у карточки меньше 50 переходов без рекламы за 30 дней';
+  else if (est.clicks === 0) crSource = `пока только конверсия карточки без рекламы за 30 дней: ${orgOrders} заказов из ${orgOpens} переходов`;
   else {
     crSource = `реклама: ${est.orders} заказов из ${est.clicks} кликов${fact.otherOrders ? ` (из них ${fact.otherOrders} — другие ваши товары)` : ''}, свежие дни весомее`;
-    if (est.priorUsed) crSource += `; плюс конверсия карточки ${pctTxt(priorCr)}% (${organic.orders} из ${organic.open} переходов) с весом 50 кликов${est.clicks < 300 ? ' — пока своих кликов мало, она не даёт оценке прыгать' : ''}`;
+    if (est.priorUsed) crSource += `; плюс конверсия карточки без рекламы ${pctTxt(priorCr)}% (${orgOrders} из ${orgOpens} переходов) с весом 50 кликов${est.clicks < 300 ? ' — пока своих кликов мало, она не даёт оценке прыгать' : ''}`;
     if (est.clicks < MIN_CLICKS_FOR_CR) crSource += ' — данных мало, диапазон широкий';
   }
   let ctr;
@@ -425,7 +437,7 @@ export function budgetPlan(inputs, range, fact, { stockUnits = null } = {}) {
   const budgets = [...new Set([inputs.dailyBudget, 300, 500, 1000, 2000].filter((b) => b > 0).map((b) => Math.round(b)))].sort((a, b) => a - b);
   const line = (budget) => {
     const clicks = budget / cpc;
-    const at = (e, cr) => (e && cr != null ? { orders: round(clicks * cr, 1), profit: e.profitPerOrderAfterAds != null ? round(clicks * cr * e.profitPerOrderAfterAds, 0) : null } : null);
+    const at = (e, cr) => (e && cr != null ? { orders: round(clicks * cr, 1), profit: e.profitPerClick != null ? round(clicks * e.profitPerClick, 0) : null } : null);
     return {
       budget,
       current: budget === Math.round(inputs.dailyBudget || 0),
@@ -475,7 +487,7 @@ export function snapshotForecasts(db, settings, today = todayMsk()) {
   return made;
 }
 
-const pick = (e) => ({ profitPerOrder: e.profitPerOrder, costPerOrder: e.costPerOrder, drrPct: e.drrPct, profitPerOrderAfterAds: e.profitPerOrderAfterAds, breakEvenBid: e.breakEvenBid, targetBid: e.targetBid, adShareOfMarginPct: e.adShareOfMarginPct });
+const pick = (e) => ({ profitPerClick: e.profitPerClick, profitPer100Clicks: e.profitPer100Clicks, profitPerOrder: e.profitPerOrder, costPerOrder: e.costPerOrder, drrPct: e.drrPct, profitPerOrderAfterAds: e.profitPerOrderAfterAds, breakEvenBid: e.breakEvenBid, targetBid: e.targetBid, adShareOfMarginPct: e.adShareOfMarginPct });
 
 /** Карточки «Реклама»: каждая кампания × товар — вводные, прогноз, факт, сравнение, сценарии и советы. */
 export function adsOverview(db, settings, today = todayMsk()) {

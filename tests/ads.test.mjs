@@ -2,7 +2,7 @@ import { wilson } from '../src/stats.mjs';
 // Экономика рекламы: формулы, сценарии ставок, сравнение прогноза с фактом, советы, сбор с тестового WB.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adRange, adEconomics, adRecommendations, bidScenarios, compareForecast, effectiveCpc, bidForCpc } from '../src/ads.mjs';
+import { adRange, budgetPlan, adEconomics, adRecommendations, bidScenarios, compareForecast, effectiveCpc, bidForCpc } from '../src/ads.mjs';
 
 test('цена клика: за клик с аукционом второй цены и за показы', () => {
   assert.equal(effectiveCpc({ paymentType: 'cpc', bid: 9, chargeRatio: 0.46 }), 9 * 0.46);
@@ -115,4 +115,13 @@ test('статус «пауза» от WB при списании бюджета
   const old = { advert_id: 1, status: 11, budget_spent_at: '2026-11-24T10:00:00Z' };
   assert.equal(effectiveStatus(old, null, now).status, 11);
   assert.equal(effectiveStatus({ advert_id: 2, status: 9 }, null, now).byFact, false);
+});
+
+test('ноль заказов: худший вариант — потеря всего бюджета, совет «скорее в минус»', () => {
+  const w = wilson(0, 54);
+  const inp = { paymentType: 'cpc', bid: 9, chargeRatio: 0.9, status: 9, cr: 0, crLow: w.low, crHigh: w.high, price: 986, profitPerUnit: 313, buyoutPct: 91, targetDrrPct: 20, dailyBudget: 80, crSource: 'реклама' };
+  const r = adRange(inp);
+  assert.equal(r.base.profitPerClick, -8.1);
+  const recs = adRecommendations({ econ: r.base, range: r, fact: { clicks: 54, orders: 0, spend: 439, perDay: { spend: 80, clicks: 10 } }, inputs: inp, recommended: null, organicCr: null, stockDays: 60, settings: { targetDrrPct: 20, minStockDays: 14 } });
+  assert.ok(recs.some((x) => x.level === 'warning' && /Скорее в минус/.test(x.text)), JSON.stringify(recs));
 });
