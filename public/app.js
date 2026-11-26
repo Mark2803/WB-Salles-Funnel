@@ -173,13 +173,7 @@
   document.getElementById('btnClaude').addEventListener('click', async () => {
     try {
       const res = await api('export/claude', { raw: true });
-      const text = await res.text();
-      try {
-        await navigator.clipboard.writeText(text);
-        toast('Сводка скопирована. Вставьте её в чат с Claude.');
-      } catch {
-        showTextModal(text);
-      }
+      showTextModal(await res.text());
     } catch (err) {
       toast(err.message);
     }
@@ -190,10 +184,26 @@
   });
 
   function showTextModal(text) {
-    $app.insertAdjacentHTML('afterbegin', `<div class="panel" id="exportBox"><h3>Сводка для ИИ</h3><p class="muted">Текст уже выделен: скопируйте его и вставьте в чат с ИИ. Сам он никуда не отправляется.</p><textarea id="exportText" rows="14"></textarea></div>`);
+    document.getElementById('exportBox')?.remove();
+    $app.insertAdjacentHTML('afterbegin', `<div class="panel" id="exportBox"><h3>Сводка по всей «Воронке» для ИИ</h3>
+      <p class="muted">Товары, юнит-экономика, реклама, стратегии, журнал, отзывы, тарифы и настройки — одним текстом. Нажмите «Скопировать» и вставьте в чат с ИИ (Ctrl+V). Сама сводка никуда не отправляется.</p>
+      <p><button class="btn" id="exportCopy" type="button">Скопировать</button> <button class="btn ghost" id="exportClose" type="button">Закрыть</button> <span class="small muted" id="exportDone"></span></p>
+      <textarea id="exportText" rows="14" readonly></textarea></div>`);
     const ta = document.getElementById('exportText');
     ta.value = text;
-    ta.select();
+    document.getElementById('exportClose').onclick = () => document.getElementById('exportBox')?.remove();
+    document.getElementById('exportCopy').onclick = async () => {
+      const done = document.getElementById('exportDone');
+      try {
+        await navigator.clipboard.writeText(text);
+        done.textContent = 'Скопировано — вставьте в чат.';
+      } catch {
+        ta.focus();
+        ta.select();
+        done.textContent = 'Не удалось скопировать автоматически: текст выделен, нажмите Ctrl+C.';
+      }
+    };
+    window.scrollTo(0, 0);
   }
 
   // ---------- Маршрутизация ----------

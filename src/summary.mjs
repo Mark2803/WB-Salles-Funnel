@@ -1,4 +1,4 @@
-// «Отправить сводку ИИ»: текст в Markdown, который можно вставить в чат и обсуждать стратегию на живых цифрах.
+// «Получить сводку для ИИ»: одна сводка по всей «Воронке» (товары, юнит-экономика, реклама, стратегии, журнал, отзывы, тарифы, настройки) — текст в Markdown, который можно вставить в чат и обсуждать стратегию на живых цифрах.
 import { addDays, todayMsk } from './dates.mjs';
 import { overview } from './metrics.mjs';
 import { getStrategy, planVsFact } from './strategies.mjs';
@@ -13,12 +13,12 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   lines.push('');
   lines.push('Период: последние 7 дней (в скобках — изменение к прошлым 7 дням). Органических показов в API WB нет, воронка начинается с переходов в карточку.');
   lines.push('');
-  lines.push('| Артикул | Товар | Цена продавца, ₽ | Остаток | Переходы | В корзину | Заказы | Выкупы | Конв. корзина | Конв. заказ | Реклама, ₽ | ДРР | Ожидаемая прибыль за 7 дн., ₽ | Рейтинг |');
-  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  lines.push('| Артикул | Товар | Цена продавца, ₽ | Остаток | Переходы | В корзину | Заказы | Выкупы | Конв. корзина | Конв. заказ | Реклама, ₽ | ДРР | Маржа за 7 дн., ₽ | Реклама / маржа | Ожидаемая прибыль за 7 дн., ₽ | Рейтинг |');
+  lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
   for (const p of items) {
     const w = p.week;
     lines.push(
-      `| ${p.nmId} | ${p.title || p.vendorCode || ''} | ${fmt(p.snapshot.seller_price)} | ${fmt(p.snapshot.stocks_wb)}${p.stockDays != null ? ` (~${p.stockDays} дн.)` : ''} | ${fmt(w.open)} (${fmt(p.changes.open, '%')}) | ${fmt(w.cart)} | ${fmt(w.orders)} (${fmt(p.changes.orders, '%')}) | ${fmt(w.buyouts)} | ${fmt(w.cartConv, '%')} | ${fmt(w.orderConv, '%')} | ${fmt(w.ads.spend)} | ${fmt(w.ads.drr, '%')} | ${fmt(p.weekProfit)} | ${fmt(p.snapshot.feedback_rating)} |`,
+      `| ${p.nmId} | ${p.title || p.vendorCode || ''} | ${fmt(p.snapshot.seller_price)} | ${fmt(p.snapshot.stocks_wb)}${p.stockDays != null ? ` (~${p.stockDays} дн.)` : ''} | ${fmt(w.open)} (${fmt(p.changes.open, '%')}) | ${fmt(w.cart)} | ${fmt(w.orders)} (${fmt(p.changes.orders, '%')}) | ${fmt(w.buyouts)} | ${fmt(w.cartConv, '%')} | ${fmt(w.orderConv, '%')} | ${fmt(w.ads.spend)} | ${fmt(w.ads.drr, '%')} | ${fmt(p.weekMargin)} | ${fmt(p.adShareOfMarginPct, '%')} | ${fmt(p.weekProfit)} | ${fmt(p.snapshot.feedback_rating)} |`,
     );
   }
   lines.push('');
@@ -26,7 +26,7 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   for (const p of items) {
     const u = p.unit;
     lines.push(
-      `- ${p.nmId}: себестоимость ${fmt(u.cost, ' ₽')}, прибыль с продажи до рекламы ${fmt(u.profitPerUnit, ' ₽')}, безубыточность ${fmt(u.breakEvenPrice, ' ₽')}, рабочая реклама на продажу ${fmt(u.workAdPerSale, ' ₽')}, комиссия ${fmt(u.commissionPct, '%')}, логистика на продажу ${fmt(u.logisticsPerSold, ' ₽')} (комиссия: ${u.commissionSource}; логистика: ${u.logisticsSource})`,
+      `- ${p.nmId}: цена ${fmt(u.price, ' ₽')}, себестоимость ${fmt(u.cost, ' ₽')}, комиссия ${fmt(u.commissionPct, '%')}, налог ${fmt(u.taxPct, '%')}, логистика на продажу ${fmt(u.logisticsPerSold, ' ₽')}, хранение на продажу ${fmt(u.storagePerSold, ' ₽')}, выкуп ${fmt(u.buyoutPct, '%')}, маржа (прибыль с продажи до рекламы) ${fmt(u.profitPerUnit, ' ₽')} = ${fmt(u.marginPct, '%')} от цены, безубыточность ${fmt(u.breakEvenPrice, ' ₽')}, рабочая реклама на продажу ${fmt(u.workAdPerSale, ' ₽')}. Источники — комиссия: ${u.commissionSource}; логистика: ${u.logisticsSource}; хранение: ${u.storageSource}.${u.missing?.length ? ` Расчёт неполный: нет ${u.missing.join(', ')}.` : ''}`,
     );
   }
   lines.push('');
@@ -47,7 +47,7 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
     const c = a.campaign;
     const e = a.economics;
     const f = a.fact;
-    lines.push(`- ${a.nmId} «${c.name}» (${c.paymentLabel}, ${c.statusLabel}): ставка ${fmt(a.inputs.bid)} ₽, цена клика ${fmt(e.cpc)} ₽, бюджет в день ${fmt(a.inputs.dailyBudget, ' ₽')}. Факт с ${f.from}: показы ${fmt(f.views)}, клики ${fmt(f.clicks)}, CTR ${fmt(f.ctr, '%')}, заказы ${fmt(f.orders)}, расход ${fmt(f.spend, ' ₽')}, ДРР ${fmt(f.drrPct, '%')}. Расчёт: конверсия ${fmt(e.cr, '%')} (${a.inputs.crSource}), ДРР ${fmt(e.drrPct, '%')}, прибыль с заказа после рекламы ${fmt(e.profitPerOrderAfterAds, ' ₽')}, безубыточная ставка ${fmt(e.breakEvenBid)}, ставка под цель ${fmt(e.targetBid)}.`);
+    lines.push(`- ${a.nmId} «${c.name}» (${c.paymentLabel}, ${c.statusLabel}): ставка ${fmt(a.inputs.bid)} ₽, цена клика ${fmt(e.cpc)} ₽, бюджет в день ${fmt(a.inputs.dailyBudget, ' ₽')}. Факт с ${f.from}: показы ${fmt(f.views)}, клики ${fmt(f.clicks)}, CTR ${fmt(f.ctr, '%')}, заказы ${fmt(f.orders)}, расход ${fmt(f.spend, ' ₽')}, ДРР ${fmt(f.drrPct, '%')}. Расчёт: конверсия ${fmt(e.cr, '%')} (${a.inputs.crSource}), ДРР ${fmt(e.drrPct, '%')}, прибыль с заказа после рекламы ${fmt(e.profitPerOrderAfterAds, ' ₽')}, реклама съедает ${fmt(e.adShareOfMarginPct, '%')} маржи, безубыточная ставка ${fmt(e.breakEvenBid)}, ставка под цель ${fmt(e.targetBid)}.`);
     for (const r of a.recommendations) lines.push(`  - ${r.text}`);
   }
   lines.push('');
@@ -71,6 +71,11 @@ export function buildClaudeSummary(db, settings, today = todayMsk()) {
   lines.push('## Негативные отзывы за 30 дней');
   if (!neg.length) lines.push('- нет');
   for (const f of neg) lines.push(`- ${String(f.created_at).slice(0, 10)} ${f.nm_id}, ${f.rating}★: ${(f.text || f.cons || '').slice(0, 200)}`);
+  lines.push('');
+  const tariffs = db.prepare('SELECT changed_at, item, field, old_value, new_value FROM tariff_changes WHERE changed_at >= ? ORDER BY changed_at DESC LIMIT 20').all(addDays(today, -30));
+  lines.push('## Изменения тарифов WB за 30 дней');
+  if (!tariffs.length) lines.push('- нет');
+  for (const t of tariffs) lines.push(`- ${String(t.changed_at).slice(0, 10)} ${t.item} — ${t.field}: ${fmt(t.old_value)} → ${fmt(t.new_value)}`);
   lines.push('');
   lines.push(`Настройки: цель ДРР ${settings.targetDrrPct}%, желаемая прибыль после рекламы ${settings.targetProfitPerUnit} ₽/шт., налог ${settings.taxPct != null ? `${settings.taxPct}%` : 'не задан'}.`);
   return lines.join('\n');
